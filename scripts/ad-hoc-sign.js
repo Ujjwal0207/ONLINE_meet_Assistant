@@ -197,7 +197,7 @@ exports.default = async function (context) {
     try {
         // Strip macOS Finder extended attributes that cause "resource fork or detritus" failure
         try {
-            execSync(`xattr -cr "${appPath}"`);
+            execSync(`find "${appPath}" -exec xattr -c {} + 2>/dev/null || true`);
         } catch {}
         // --force: replace existing signature
         // --deep: sign nested code (frameworks, helpers, .dylib, .node)
