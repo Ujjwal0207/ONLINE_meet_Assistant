@@ -195,9 +195,9 @@ exports.default = async function (context) {
     console.log(`[Ad-Hoc Signing] Signing main app ${appPath} with entitlements...`);
 
     try {
-        // Strip macOS Finder extended attributes that cause "resource fork or detritus" failure
+        // Strip macOS Finder extended attributes (including symlinks with -s) that cause "resource fork or detritus" failure
         try {
-            execSync(`find "${appPath}" -exec xattr -c {} + 2>/dev/null || true`);
+            execSync(`find "${appPath}" -exec xattr -s -c {} + 2>/dev/null || true`);
         } catch {}
         // --force: replace existing signature
         // --deep: sign nested code (frameworks, helpers, .dylib, .node)
