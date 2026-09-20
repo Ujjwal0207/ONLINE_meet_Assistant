@@ -129,6 +129,7 @@ export class LiveRAGIndexer {
                 const { ForegroundGate } = require('../services/ForegroundGate') as typeof import('../services/ForegroundGate');
                 let embeddedCount = 0;
                 try {
+                    await new Promise(r => setImmediate(r));
                     await ForegroundGate.waitUntilIdle();
                     const { embeddings, space, provider, dimensions } = await this.embeddingPipeline.getEmbeddingsWithFallback(
                         indexedChunks.map((chunk) => chunk.text)

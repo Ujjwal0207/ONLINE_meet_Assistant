@@ -894,12 +894,7 @@ export class HindsightManager {
         // augmentPath() fixes the Finder-launch minimal-PATH caveat (python3 not found).
         env: { ...process.env, PATH: this.augmentPath(), ...credsEnv },
       };
-      this.serverProcess = allowShell
-        // Legacy shell form (opt-in via HINDSIGHT_SERVER_COMMAND_ALLOW_SHELL=true).
-        ? spawn(command, { ...spawnOpts, shell: true })
-        // Default safe form — argv[0] + args, NO shell interpretation. argv is non-null
-        // here (we returned early above if parseCommandToArgv failed).
-        : spawn(argv![0], argv!.slice(1), { ...spawnOpts, shell: false });
+      this.serverProcess = spawn(argv![0], argv!.slice(1), { ...spawnOpts, shell: false });
       // The parent no longer needs the fd once the child owns it.
       if (outFd !== null) { try { require('fs').closeSync(outFd); } catch { /* noop */ } }
       // Persist the app-managed root PID so the next launch can reap the process

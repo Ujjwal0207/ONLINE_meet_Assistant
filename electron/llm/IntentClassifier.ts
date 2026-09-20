@@ -595,9 +595,11 @@ export async function classifyIntent(
             return patternResult;
         }
 
-        // Tier 2: Try zero-shot SLM (if regex didn't match)
+        // Tier 2: Try zero-shot SLM (if regex didn't match), bounded by 100ms for ultra-low latency
         if (lastInterviewerTurn.trim().length > 5) {
-            const slmResult = await ZeroShotClassifier.getInstance().classify(lastInterviewerTurn);
+            const slmPromise = ZeroShotClassifier.getInstance().classify(lastInterviewerTurn);
+            const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 100));
+            const slmResult = await Promise.race([slmPromise, timeoutPromise]);
             if (slmResult) {
                 return slmResult;
             }

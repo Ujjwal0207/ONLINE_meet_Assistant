@@ -28,7 +28,7 @@ import type { WhatToAnswerRequestSnapshot } from "./whatToAnswerRequestSnapshot"
 // cold/slow/rate-limited. We cap the await here and fall through to the cheap
 // synchronous lexical retrieval on timeout, so a slow embedder can never stall
 // first-useful-token. Mirrors the bounded grounding race in IntelligenceEngine.
-const HYBRID_RETRIEVAL_BUDGET_MS = 1500;
+const HYBRID_RETRIEVAL_BUDGET_MS = 150;
 // Document-grounded custom modes answer STRICTLY from uploaded files, so their
 // vector retrieval is not optional — a cloud query-embed routinely exceeds 1500ms,
 // and falling to lexical-only makes the model miss facts that ARE in the docs and

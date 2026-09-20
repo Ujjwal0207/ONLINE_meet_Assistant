@@ -347,6 +347,7 @@ export class EmbeddingPipeline {
             // post-meeting embedding backlog can't make live questions lag.
             const { ForegroundGate } = require('../services/ForegroundGate') as typeof import('../services/ForegroundGate');
             while (true) {
+                await new Promise(r => setImmediate(r));
                 await ForegroundGate.waitUntilIdle();
                 // Fetch next pending item. Items marked for local fallback (retry_count = -1)
                 // are also eligible, so we use a broad filter.
