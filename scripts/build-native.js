@@ -85,7 +85,22 @@ function fixMacOSDylibPaths(nodeFilePath) {
   }
 }
 
+function canBuildCidre() {
+  try {
+    execSync('xcodebuild -version', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 if (os.platform() === 'darwin') {
+  if (!canBuildCidre()) {
+    console.log('[build-native] Notice: Full Xcode.app (xcodebuild) is not installed (Command Line Tools active).');
+    console.log('[build-native] Skipping optional Rust native-module build; Natively will use built-in audio fallback.');
+    process.exit(0);
+  }
+
   const macTargets = buildAllMacTargets
     ? ['x86_64-apple-darwin', 'aarch64-apple-darwin']
     : [os.arch() === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin'];

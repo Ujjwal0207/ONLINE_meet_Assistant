@@ -195,6 +195,10 @@ exports.default = async function (context) {
     console.log(`[Ad-Hoc Signing] Signing main app ${appPath} with entitlements...`);
 
     try {
+        // Strip macOS Finder extended attributes that cause "resource fork or detritus" failure
+        try {
+            execSync(`xattr -cr "${appPath}"`);
+        } catch {}
         // --force: replace existing signature
         // --deep: sign nested code (frameworks, helpers, .dylib, .node)
         // --entitlements: attach entitlements to the top-level app bundle
