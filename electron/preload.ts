@@ -54,6 +54,7 @@ interface ElectronAPI {
   browserTakeSelectiveScreenshot: () => Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }>;
   browserTakeScreenshot: () => Promise<{ success: boolean; error?: string }>;
   onBrowserNavigateTo: (callback: (url: string) => void) => () => void;
+  browserGetGuestPreloadUrl: () => Promise<string>;
 
   analyzeImageFile: (path: string) => Promise<void>;
   quitApp: () => Promise<void>;
@@ -1970,6 +1971,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('browser:navigate-to', subscription);
     };
   },
+  browserGetGuestPreloadUrl: () => ipcRenderer.invoke('browser:get-guest-preload-url'),
 
   // Groq Fast Text Mode
   getGroqFastTextMode: () => ipcRenderer.invoke('get-groq-fast-text-mode'),

@@ -128,6 +128,7 @@ export interface ElectronAPI {
   browserTakeSelectiveScreenshot: () => Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }>
   browserTakeScreenshot: () => Promise<{ success: boolean; error?: string }>
   onBrowserNavigateTo: (callback: (url: string) => void) => () => void
+  browserGetGuestPreloadUrl?: () => Promise<string>
   toggleAdvancedSettings: () => Promise<void>
   closeAdvancedSettings: () => Promise<void>
   openSettingsTab: (tab: string) => Promise<void>

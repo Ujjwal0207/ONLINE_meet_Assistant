@@ -195,16 +195,20 @@ exports.default = async function (context) {
     console.log(`[Ad-Hoc Signing] Signing main app ${appPath} with entitlements...`);
 
     try {
-        // Strip macOS Finder extended attributes (including symlinks with -s) that cause "resource fork or detritus" failure
         try {
             execSync(`find "${appPath}" -exec xattr -s -c {} + 2>/dev/null || true`);
         } catch {}
-        // --force: replace existing signature
-        // --deep: sign nested code (frameworks, helpers, .dylib, .node)
-        // --entitlements: attach entitlements to the top-level app bundle
-        // --sign -: ad-hoc signature
-        execSync(`codesign --force --deep ${hardenedOpt}--entitlements "${entitlementsPath}" --sign - "${appPath}"`, { stdio: 'inherit' });
-        console.log('[Ad-Hoc Signing] Successfully signed the application with entitlements.');
+        try {
+            execSync(`codesign --force --deep ${hardenedOpt}--entitlements "${entitlementsPath}" --sign - "${appPath}"`, { stdio: 'inherit' });
+            console.log('[Ad-Hoc Signing] Successfully signed the application with entitlements.');
+        } catch (initialErr) {
+            console.warn('[Ad-Hoc Signing] In-place signing failed (likely iCloud Drive sync). Signing via clean staging directory...');
+            const stagingApp = `/tmp/Natively-sign-${Date.now()}.app`;
+            execSync(`rm -rf "${stagingApp}" && cp -R "${appPath}" "${stagingApp}" && xattr -cr "${stagingApp}"`);
+            execSync(`codesign --force --deep ${hardenedOpt}--entitlements "${entitlementsPath}" --sign - "${stagingApp}"`, { stdio: 'inherit' });
+            execSync(`rm -rf "${appPath}" && cp -R "${stagingApp}" "${appPath}" && rm -rf "${stagingApp}"`);
+            console.log('[Ad-Hoc Signing] Successfully signed via clean staging directory.');
+        }
     } catch (error) {
         console.error('[Ad-Hoc Signing] Failed to sign the application:', error);
         throw error;

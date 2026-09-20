@@ -94,6 +94,15 @@ build({
   },
   logLevel: 'warning',
 }).then(() => {
+  // Strip node banner from stealthGuestPreload.js since it runs in a browser webview context
+  const guestPreloadPath = path.join(outDir, 'electron', 'stealthGuestPreload.js');
+  if (fs.existsSync(guestPreloadPath)) {
+    let content = fs.readFileSync(guestPreloadPath, 'utf8');
+    if (content.startsWith('try{if(process.env.NATIVELY_UI_EVAL')) {
+      content = content.replace(/^try\{if\(process\.env\.NATIVELY_UI_EVAL[\s\S]*?catch\(_\)\{\}\}\r?\n/, '');
+      fs.writeFileSync(guestPreloadPath, content, 'utf8');
+    }
+  }
   console.log(`[build-electron] Done in ${Date.now() - start}ms`);
 }).catch((err) => {
   console.error('[build-electron] Build failed:', err.message);

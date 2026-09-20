@@ -117,6 +117,18 @@ try {
   // auto-reload handler recovers it.
 }
 
+// ----------------------------------------------------------------------------
+// STEALTH BROWSER IDENTIFICATION & CHROMIUM ENVIRONMENT HARDENING
+// ----------------------------------------------------------------------------
+// 1. Disable Blink's AutomationControlled feature so Chromium never sets
+//    navigator.webdriver = true or exposes internal test/automation flags.
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+
+// 2. Override default Electron user-agent fallback globally with modern genuine Google Chrome
+const CHROME_VERSION = '131.0.6778.265';
+const GLOBAL_CHROME_UA = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Safari/537.36`;
+app.userAgentFallback = GLOBAL_CHROME_UA;
+
 /**
  * Whether THIS build carries a real Developer ID signature.
  *

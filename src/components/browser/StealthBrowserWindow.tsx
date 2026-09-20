@@ -52,7 +52,7 @@ const PRESETS = [
 ];
 
 const DESKTOP_CHROME_UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.265 Safari/537.36';
 
 export const StealthBrowserWindow: React.FC = () => {
   const initialUrlFromQuery =
@@ -66,6 +66,7 @@ export const StealthBrowserWindow: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastSuccess, setToastSuccess] = useState(true);
   const [isUndetectable, setIsUndetectable] = useState(true);
+  const [guestPreloadUrl, setGuestPreloadUrl] = useState<string>('');
 
   const webviewRef = useRef<any>(null);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -112,6 +113,10 @@ export const StealthBrowserWindow: React.FC = () => {
 
     window.electronAPI?.getUndetectable?.().then((undetectable: boolean) => {
       setIsUndetectable(undetectable);
+    }).catch(() => {});
+
+    window.electronAPI?.browserGetGuestPreloadUrl?.().then((url: string) => {
+      if (url) setGuestPreloadUrl(url);
     }).catch(() => {});
 
     return () => {
@@ -417,6 +422,15 @@ export const StealthBrowserWindow: React.FC = () => {
             <Sparkles size={11} className="text-amber-400" />
             <span>Session Saved</span>
           </div>
+
+          {/* Chrome Safe Auth Badge */}
+          <div
+            className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-300"
+            title="Browser identifies as genuine Google Chrome 131 with full Google & OpenAI auth compatibility"
+          >
+            <Shield size={11} className="text-emerald-400" />
+            <span>Chrome Safe</span>
+          </div>
         </div>
       </header>
 
@@ -442,6 +456,7 @@ export const StealthBrowserWindow: React.FC = () => {
           partition="persist:stealth-browser"
           useragent={DESKTOP_CHROME_UA}
           allowpopups={true}
+          {...(guestPreloadUrl ? { preload: guestPreloadUrl } : {})}
           className="w-full h-full border-0 bg-[#121214]"
           style={{ width: '100%', height: '100%', display: 'flex' }}
         />

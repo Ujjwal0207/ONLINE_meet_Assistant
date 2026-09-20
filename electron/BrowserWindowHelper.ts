@@ -1,5 +1,7 @@
-import { BrowserWindow, screen, app, clipboard, nativeImage } from "electron"
+import { BrowserWindow, screen, app, clipboard, nativeImage, session } from "electron"
 import path from "node:path"
+import fs from "node:fs"
+import url from "node:url"
 import type { WindowHelper } from "./WindowHelper"
 import type { ScreenshotHelper } from "./ScreenshotHelper"
 
@@ -9,13 +11,130 @@ const startUrl = isDev
     ? "http://localhost:5180"
     : `file://${path.join(app.getAppPath(), "dist/index.html")}`
 
+export const CHROME_VERSION = "131.0.6778.265"
+export const CHROME_DESKTOP_UA = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Safari/537.36`
+const CHROME_BRANDS = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
+const CHROME_FULL_VERSION_LIST = `"Google Chrome";v="${CHROME_VERSION}", "Chromium";v="${CHROME_VERSION}", "Not_A Brand";v="24.0.0.0"`
+
 export class BrowserWindowHelper {
     private browserWindow: BrowserWindow | null = null
     private windowHelper: WindowHelper | null = null
     private screenshotHelper: ScreenshotHelper | null = null
     private contentProtection: boolean = false
+    private sessionConfigured: boolean = false
 
-    constructor() {}
+    constructor() {
+        this.initStealthSession()
+
+        // Ensure any child popup windows (e.g. Google OAuth login dialogs) inherit screen protection
+        app.on("browser-window-created", (_, win) => {
+            if (this.contentProtection && !win.isDestroyed()) {
+                try {
+                    win.setContentProtection(true)
+                } catch (e) {
+                    console.warn("[BrowserWindowHelper] Failed to apply content protection to child window:", e)
+                }
+            }
+        })
+    }
+
+    public getGuestPreloadUrl(): string {
+        const p = path.join(__dirname, "stealthGuestPreload.js")
+        return url.pathToFileURL(p).href
+    }
+
+    public initStealthSession(): void {
+        if (this.sessionConfigured) return
+
+        try {
+            const stealthSession = session.fromPartition("persist:stealth-browser")
+
+            // 1. Force the session User-Agent to clean Chrome desktop
+            stealthSession.setUserAgent(CHROME_DESKTOP_UA)
+
+            // 2. Register guest preload script with Chrome navigator properties
+            const guestPreloadPath = path.join(__dirname, "stealthGuestPreload.js")
+            if (fs.existsSync(guestPreloadPath)) {
+                try {
+                    if (typeof (stealthSession as any).registerPreloadScript === "function") {
+                        (stealthSession as any).registerPreloadScript({ filePath: guestPreloadPath })
+                    } else if (typeof (stealthSession as any).setPreloads === "function") {
+                        (stealthSession as any).setPreloads([guestPreloadPath])
+                    }
+                } catch (e) {
+                    console.warn("[BrowserWindowHelper] Could not register preload script on session:", e)
+                }
+            }
+
+            // 3. Intercept outgoing request headers to sanitize client hints & remove Electron markers
+            stealthSession.webRequest.onBeforeSendHeaders((details, callback) => {
+                const headers = { ...details.requestHeaders }
+
+                // Always enforce clean desktop Chrome User-Agent
+                headers["User-Agent"] = CHROME_DESKTOP_UA
+                headers["user-agent"] = CHROME_DESKTOP_UA
+
+                // Replace/clean Sec-CH-UA client hints to match genuine Google Chrome
+                if (headers["Sec-CH-UA"] || headers["sec-ch-ua"]) {
+                    headers["Sec-CH-UA"] = CHROME_BRANDS
+                    headers["sec-ch-ua"] = CHROME_BRANDS
+                }
+                if (headers["Sec-CH-UA-Full-Version-List"] || headers["sec-ch-ua-full-version-list"]) {
+                    headers["Sec-CH-UA-Full-Version-List"] = CHROME_FULL_VERSION_LIST
+                    headers["sec-ch-ua-full-version-list"] = CHROME_FULL_VERSION_LIST
+                }
+                if (headers["Sec-CH-UA-Mobile"] || headers["sec-ch-ua-mobile"]) {
+                    headers["Sec-CH-UA-Mobile"] = "?0"
+                    headers["sec-ch-ua-mobile"] = "?0"
+                }
+                if (headers["Sec-CH-UA-Platform"] || headers["sec-ch-ua-platform"]) {
+                    headers["Sec-CH-UA-Platform"] = '"macOS"'
+                    headers["sec-ch-ua-platform"] = '"macOS"'
+                }
+                if (headers["Sec-CH-UA-Platform-Version"] || headers["sec-ch-ua-platform-version"]) {
+                    headers["Sec-CH-UA-Platform-Version"] = '"15.2.0"'
+                    headers["sec-ch-ua-platform-version"] = '"15.2.0"'
+                }
+                if (headers["Sec-CH-UA-Arch"] || headers["sec-ch-ua-arch"]) {
+                    headers["Sec-CH-UA-Arch"] = '"arm"'
+                    headers["sec-ch-ua-arch"] = '"arm"'
+                }
+                if (headers["Sec-CH-UA-Bitness"] || headers["sec-ch-ua-bitness"]) {
+                    headers["Sec-CH-UA-Bitness"] = '"64"'
+                    headers["sec-ch-ua-bitness"] = '"64"'
+                }
+                if (headers["Sec-CH-UA-Model"] || headers["sec-ch-ua-model"]) {
+                    headers["Sec-CH-UA-Model"] = '""'
+                    headers["sec-ch-ua-model"] = '""'
+                }
+
+                // Strip any residual Electron markers from custom headers
+                for (const key of Object.keys(headers)) {
+                    if (typeof headers[key] === "string" && headers[key].includes("Electron/")) {
+                        headers[key] = headers[key].replace(/Electron\/[\d.]+\s?/g, "")
+                    }
+                }
+
+                callback({ requestHeaders: headers })
+            })
+
+            // 4. Intercept incoming responses on authentication endpoints to strip accept-ch query challenges
+            stealthSession.webRequest.onHeadersReceived((details, callback) => {
+                const headers = { ...details.responseHeaders }
+                const urlLower = details.url.toLowerCase()
+                if (urlLower.includes("accounts.google.com") || urlLower.includes("openai.com")) {
+                    delete headers["accept-ch"]
+                    delete headers["Accept-CH"]
+                }
+                callback({ responseHeaders: headers })
+            })
+
+            this.sessionConfigured = true
+            console.log("[BrowserWindowHelper] persist:stealth-browser session configured with Chrome 131 identity")
+        } catch (err) {
+            console.error("[BrowserWindowHelper] Failed to configure stealth session:", err)
+        }
+    }
 
     public setWindowHelper(wh: WindowHelper): void {
         this.windowHelper = wh
@@ -103,6 +222,8 @@ export class BrowserWindowHelper {
     }
 
     private createWindow(initialUrl?: string): void {
+        this.initStealthSession()
+
         const primaryDisplay = screen.getPrimaryDisplay()
         const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
 
@@ -135,6 +256,34 @@ export class BrowserWindowHelper {
         })
 
         this.browserWindow.setContentProtection(this.contentProtection)
+
+        // Attach to the webview once mounted in the renderer
+        this.browserWindow.webContents.on("did-attach-webview", (_, webviewContents) => {
+            // Enforce clean user agent on the webview webContents
+            webviewContents.setUserAgent(CHROME_DESKTOP_UA)
+
+            // Intercept window.open calls from within the webview (e.g. Google OAuth login popup)
+            webviewContents.setWindowOpenHandler((details) => {
+                const guestPreloadPath = path.join(__dirname, "stealthGuestPreload.js")
+                return {
+                    action: "allow",
+                    overrideBrowserWindowOptions: {
+                        width: 520,
+                        height: 680,
+                        title: "Sign In",
+                        autoHideMenuBar: true,
+                        backgroundColor: "#121214",
+                        show: true,
+                        webPreferences: {
+                            partition: "persist:stealth-browser",
+                            contextIsolation: true,
+                            nodeIntegration: false,
+                            preload: fs.existsSync(guestPreloadPath) ? guestPreloadPath : undefined,
+                        },
+                    },
+                }
+            })
+        })
 
         const queryParams = new URLSearchParams()
         queryParams.set("window", "browser")

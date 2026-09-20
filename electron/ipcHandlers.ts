@@ -4737,6 +4737,10 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  safeHandle('browser:get-guest-preload-url', async () => {
+    return appState.browserWindowHelper.getGuestPreloadUrl();
+  });
+
   safeHandle('set-undetectable', async (_, state: boolean) => {
     appState.setUndetectable(state);
     // Return the AUTHORITATIVE final state so the renderer can reconcile / roll
