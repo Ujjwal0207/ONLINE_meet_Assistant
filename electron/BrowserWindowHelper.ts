@@ -16,6 +16,22 @@ export const CHROME_DESKTOP_UA = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7
 const CHROME_BRANDS = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
 const CHROME_FULL_VERSION_LIST = `"Google Chrome";v="${CHROME_VERSION}", "Chromium";v="${CHROME_VERSION}", "Not_A Brand";v="24.0.0.0"`
 
+function setHeaderClean(headers: Record<string, string>, targetName: string, value: string) {
+    const targetLower = targetName.toLowerCase()
+    let foundKey: string | null = null
+    for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === targetLower) {
+            if (!foundKey) {
+                foundKey = key
+            } else {
+                delete headers[key]
+            }
+        }
+    }
+    const keyToUse = foundKey || targetName
+    headers[keyToUse] = value
+}
+
 export class BrowserWindowHelper {
     private browserWindow: BrowserWindow | null = null
     private windowHelper: WindowHelper | null = null
@@ -26,8 +42,13 @@ export class BrowserWindowHelper {
     constructor() {
         this.initStealthSession()
 
-        // Ensure any child popup windows (e.g. Google OAuth login dialogs) inherit screen protection
+        // Ensure any child popup windows (e.g. Google OAuth login dialogs) inherit screen protection & user agent
         app.on("browser-window-created", (_, win) => {
+            if (!win.isDestroyed()) {
+                try {
+                    win.webContents.setUserAgent(CHROME_DESKTOP_UA)
+                } catch (e) {}
+            }
             if (this.contentProtection && !win.isDestroyed()) {
                 try {
                     win.setContentProtection(true)
@@ -38,9 +59,19 @@ export class BrowserWindowHelper {
         })
     }
 
+    public getGuestPreloadPath(): string {
+        let p = path.join(__dirname, "stealthGuestPreload.js")
+        if (!fs.existsSync(p)) {
+            const unpacked = p.replace("app.asar", "app.asar.unpacked")
+            if (fs.existsSync(unpacked)) {
+                p = unpacked
+            }
+        }
+        return p
+    }
+
     public getGuestPreloadUrl(): string {
-        const p = path.join(__dirname, "stealthGuestPreload.js")
-        return url.pathToFileURL(p).href
+        return url.pathToFileURL(this.getGuestPreloadPath()).href
     }
 
     public initStealthSession(): void {
@@ -53,7 +84,7 @@ export class BrowserWindowHelper {
             stealthSession.setUserAgent(CHROME_DESKTOP_UA)
 
             // 2. Register guest preload script with Chrome navigator properties
-            const guestPreloadPath = path.join(__dirname, "stealthGuestPreload.js")
+            const guestPreloadPath = this.getGuestPreloadPath()
             if (fs.existsSync(guestPreloadPath)) {
                 try {
                     if (typeof (stealthSession as any).registerPreloadScript === "function") {
@@ -70,42 +101,35 @@ export class BrowserWindowHelper {
             stealthSession.webRequest.onBeforeSendHeaders((details, callback) => {
                 const headers = { ...details.requestHeaders }
 
-                // Always enforce clean desktop Chrome User-Agent
-                headers["User-Agent"] = CHROME_DESKTOP_UA
-                headers["user-agent"] = CHROME_DESKTOP_UA
+                // Always enforce clean desktop Chrome User-Agent without case duplication
+                setHeaderClean(headers, "User-Agent", CHROME_DESKTOP_UA)
 
-                // Replace/clean Sec-CH-UA client hints to match genuine Google Chrome
-                if (headers["Sec-CH-UA"] || headers["sec-ch-ua"]) {
-                    headers["Sec-CH-UA"] = CHROME_BRANDS
-                    headers["sec-ch-ua"] = CHROME_BRANDS
+                // Replace/clean Sec-CH-UA client hints to match genuine Google Chrome without casing duplicates
+                const hasHeader = (name: string) => Object.keys(headers).some(k => k.toLowerCase() === name.toLowerCase())
+
+                if (hasHeader("sec-ch-ua")) {
+                    setHeaderClean(headers, "Sec-CH-UA", CHROME_BRANDS)
                 }
-                if (headers["Sec-CH-UA-Full-Version-List"] || headers["sec-ch-ua-full-version-list"]) {
-                    headers["Sec-CH-UA-Full-Version-List"] = CHROME_FULL_VERSION_LIST
-                    headers["sec-ch-ua-full-version-list"] = CHROME_FULL_VERSION_LIST
+                if (hasHeader("sec-ch-ua-full-version-list")) {
+                    setHeaderClean(headers, "Sec-CH-UA-Full-Version-List", CHROME_FULL_VERSION_LIST)
                 }
-                if (headers["Sec-CH-UA-Mobile"] || headers["sec-ch-ua-mobile"]) {
-                    headers["Sec-CH-UA-Mobile"] = "?0"
-                    headers["sec-ch-ua-mobile"] = "?0"
+                if (hasHeader("sec-ch-ua-mobile")) {
+                    setHeaderClean(headers, "Sec-CH-UA-Mobile", "?0")
                 }
-                if (headers["Sec-CH-UA-Platform"] || headers["sec-ch-ua-platform"]) {
-                    headers["Sec-CH-UA-Platform"] = '"macOS"'
-                    headers["sec-ch-ua-platform"] = '"macOS"'
+                if (hasHeader("sec-ch-ua-platform")) {
+                    setHeaderClean(headers, "Sec-CH-UA-Platform", '"macOS"')
                 }
-                if (headers["Sec-CH-UA-Platform-Version"] || headers["sec-ch-ua-platform-version"]) {
-                    headers["Sec-CH-UA-Platform-Version"] = '"15.2.0"'
-                    headers["sec-ch-ua-platform-version"] = '"15.2.0"'
+                if (hasHeader("sec-ch-ua-platform-version")) {
+                    setHeaderClean(headers, "Sec-CH-UA-Platform-Version", '"15.2.0"')
                 }
-                if (headers["Sec-CH-UA-Arch"] || headers["sec-ch-ua-arch"]) {
-                    headers["Sec-CH-UA-Arch"] = '"arm"'
-                    headers["sec-ch-ua-arch"] = '"arm"'
+                if (hasHeader("sec-ch-ua-arch")) {
+                    setHeaderClean(headers, "Sec-CH-UA-Arch", '"arm"')
                 }
-                if (headers["Sec-CH-UA-Bitness"] || headers["sec-ch-ua-bitness"]) {
-                    headers["Sec-CH-UA-Bitness"] = '"64"'
-                    headers["sec-ch-ua-bitness"] = '"64"'
+                if (hasHeader("sec-ch-ua-bitness")) {
+                    setHeaderClean(headers, "Sec-CH-UA-Bitness", '"64"')
                 }
-                if (headers["Sec-CH-UA-Model"] || headers["sec-ch-ua-model"]) {
-                    headers["Sec-CH-UA-Model"] = '""'
-                    headers["sec-ch-ua-model"] = '""'
+                if (hasHeader("sec-ch-ua-model")) {
+                    setHeaderClean(headers, "Sec-CH-UA-Model", '""')
                 }
 
                 // Strip any residual Electron markers from custom headers
@@ -264,7 +288,7 @@ export class BrowserWindowHelper {
 
             // Intercept window.open calls from within the webview (e.g. Google OAuth login popup)
             webviewContents.setWindowOpenHandler((details) => {
-                const guestPreloadPath = path.join(__dirname, "stealthGuestPreload.js")
+                const guestPreloadPath = this.getGuestPreloadPath()
                 return {
                     action: "allow",
                     overrideBrowserWindowOptions: {
@@ -287,6 +311,7 @@ export class BrowserWindowHelper {
 
         const queryParams = new URLSearchParams()
         queryParams.set("window", "browser")
+        queryParams.set("guestPreload", this.getGuestPreloadUrl())
         if (initialUrl) {
             queryParams.set("url", initialUrl)
         }

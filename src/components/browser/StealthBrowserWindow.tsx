@@ -55,8 +55,9 @@ const DESKTOP_CHROME_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.265 Safari/537.36';
 
 export const StealthBrowserWindow: React.FC = () => {
-  const initialUrlFromQuery =
-    new URLSearchParams(window.location.search).get('url') || 'https://chatgpt.com';
+  const queryParams = new URLSearchParams(window.location.search);
+  const initialUrlFromQuery = queryParams.get('url') || 'https://chatgpt.com';
+  const guestPreloadFromQuery = queryParams.get('guestPreload') || '';
 
   const [inputUrl, setInputUrl] = useState(initialUrlFromQuery);
   const [currentUrl, setCurrentUrl] = useState(initialUrlFromQuery);
@@ -66,7 +67,7 @@ export const StealthBrowserWindow: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastSuccess, setToastSuccess] = useState(true);
   const [isUndetectable, setIsUndetectable] = useState(true);
-  const [guestPreloadUrl, setGuestPreloadUrl] = useState<string>('');
+  const [guestPreloadUrl, setGuestPreloadUrl] = useState<string>(guestPreloadFromQuery);
 
   const webviewRef = useRef<any>(null);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -450,16 +451,23 @@ export const StealthBrowserWindow: React.FC = () => {
 
       {/* Embedded Electron Webview Container */}
       <main className="flex-1 w-full h-full relative bg-[#121214] overflow-hidden">
-        <webview
-          ref={webviewRef}
-          src={initialUrlFromQuery}
-          partition="persist:stealth-browser"
-          useragent={DESKTOP_CHROME_UA}
-          allowpopups={true}
-          {...(guestPreloadUrl ? { preload: guestPreloadUrl } : {})}
-          className="w-full h-full border-0 bg-[#121214]"
-          style={{ width: '100%', height: '100%', display: 'flex' }}
-        />
+        {guestPreloadUrl ? (
+          <webview
+            ref={webviewRef}
+            src={initialUrlFromQuery}
+            partition="persist:stealth-browser"
+            useragent={DESKTOP_CHROME_UA}
+            allowpopups={true}
+            preload={guestPreloadUrl}
+            className="w-full h-full border-0 bg-[#121214]"
+            style={{ width: '100%', height: '100%', display: 'flex' }}
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-slate-400">
+            <div className="w-6 h-6 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+            <span className="text-xs font-mono">Initializing secure Chrome session...</span>
+          </div>
+        )}
       </main>
     </div>
   );

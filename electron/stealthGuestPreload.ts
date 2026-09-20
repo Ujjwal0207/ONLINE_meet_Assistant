@@ -55,17 +55,21 @@
     try {
       if (!win) return;
 
-      // 1. Mask navigator.webdriver
+      // 1. Mask navigator.webdriver to boolean false (genuine unautomated Chrome)
       try {
         if (win.navigator) {
           const navProto = Object.getPrototypeOf(win.navigator);
-          if (navProto && 'webdriver' in navProto) {
-            delete navProto.webdriver;
+          if (navProto) {
+            Object.defineProperty(navProto, 'webdriver', {
+              get: () => false,
+              configurable: true,
+              enumerable: true,
+            });
           }
           Object.defineProperty(win.navigator, 'webdriver', {
-            get: () => undefined,
+            get: () => false,
             configurable: true,
-            enumerable: false,
+            enumerable: true,
           });
         }
       } catch (e) {}
@@ -101,6 +105,30 @@
       try {
         if (!win.chrome) {
           win.chrome = {};
+        }
+        if (!win.chrome.app) {
+          win.chrome.app = {
+            isInstalled: false,
+            InstallState: {
+              DISABLED: 'disabled',
+              INSTALLED: 'installed',
+              NOT_INSTALLED: 'not_installed',
+            },
+            RunningState: {
+              CANNOT_RUN: 'cannot_run',
+              READY_TO_RUN: 'ready_to_run',
+              RUNNING: 'running',
+            },
+            getDetails: function (): any {
+              return null;
+            },
+            getIsInstalled: function (): boolean {
+              return false;
+            },
+            runningState: function (): string {
+              return 'cannot_run';
+            },
+          };
         }
         if (!win.chrome.runtime) {
           win.chrome.runtime = {

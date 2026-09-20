@@ -112,6 +112,7 @@
     "asarUnpack": [
       "**/*.node",
       "**/*.dylib",
+      "**/stealthGuestPreload.js",
       "**/vectorSearchWorker.js",
       "**/whisperWorker.js",
       "**/intentClassifierWorker.js",
