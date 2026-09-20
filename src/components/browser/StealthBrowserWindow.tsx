@@ -441,7 +441,7 @@ export const StealthBrowserWindow: React.FC = () => {
           src={initialUrlFromQuery}
           partition="persist:stealth-browser"
           useragent={DESKTOP_CHROME_UA}
-          allowpopups="true"
+          allowpopups={true}
           className="w-full h-full border-0 bg-[#121214]"
           style={{ width: '100%', height: '100%', display: 'flex' }}
         />
