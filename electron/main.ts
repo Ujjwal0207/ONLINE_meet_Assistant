@@ -1016,6 +1016,7 @@ import { WindowHelper } from "./WindowHelper"
 import { SettingsWindowHelper } from "./SettingsWindowHelper"
 import { ModelSelectorWindowHelper } from "./ModelSelectorWindowHelper"
 import { CropperWindowHelper } from "./CropperWindowHelper"
+import { BrowserWindowHelper } from "./BrowserWindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
 import { KeybindManager } from "./services/KeybindManager"
 import { ProcessingHelper } from "./ProcessingHelper"
@@ -1140,6 +1141,7 @@ export class AppState {
   public settingsWindowHelper: SettingsWindowHelper
   public modelSelectorWindowHelper: ModelSelectorWindowHelper
   public cropperWindowHelper: CropperWindowHelper
+  public browserWindowHelper: BrowserWindowHelper
   private screenshotHelper: ScreenshotHelper
   public processingHelper: ProcessingHelper
 
@@ -1287,15 +1289,20 @@ export class AppState {
     this.settingsWindowHelper = new SettingsWindowHelper()
     this.modelSelectorWindowHelper = new ModelSelectorWindowHelper()
     this.cropperWindowHelper = new CropperWindowHelper()
+    this.browserWindowHelper = new BrowserWindowHelper()
 
     // 3. Initialize other helpers
     this.screenshotHelper = new ScreenshotHelper(this.view)
     this.processingHelper = new ProcessingHelper(this)
 
+    this.browserWindowHelper.setWindowHelper(this.windowHelper)
+    this.browserWindowHelper.setScreenshotHelper(this.screenshotHelper)
+
     this.windowHelper.setContentProtection(this.isUndetectable);
     this.settingsWindowHelper.setContentProtection(this.isUndetectable);
     this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
     this.cropperWindowHelper.setContentProtection(this.isUndetectable);
+    this.browserWindowHelper.setContentProtection(this.isUndetectable);
 
     if (process.platform === 'win32' || process.platform === 'darwin') {
       this.cropperWindowHelper.preload();
@@ -1534,6 +1541,8 @@ export class AppState {
       try {
         if (actionId === 'general:toggle-visibility') {
           this.toggleMainWindow();
+        } else if (actionId === 'general:toggle-browser') {
+          this.browserWindowHelper.toggleWindow();
         } else if (actionId === 'general:toggle-mouse-passthrough') {
           // Adapted from public PR #113 — verify premium interaction
           this.toggleOverlayMousePassthrough();
@@ -5871,6 +5880,10 @@ export class AppState {
     return this.windowHelper
   }
 
+  public getBrowserWindowHelper(): BrowserWindowHelper {
+    return this.browserWindowHelper
+  }
+
   public getIntelligenceManager(): IntelligenceManager {
     return this.intelligenceManager
   }
@@ -6347,6 +6360,7 @@ export class AppState {
     this.settingsWindowHelper.setContentProtection(state)
     this.modelSelectorWindowHelper.setContentProtection(state)
     this.cropperWindowHelper.setContentProtection(state)
+    this.browserWindowHelper.setContentProtection(state)
 
     if (process.platform === 'win32') {
       this.windowHelper.syncOverlayInteractionPolicy();
@@ -6508,6 +6522,7 @@ export class AppState {
     this.settingsWindowHelper.reassertContentProtection();
     this.modelSelectorWindowHelper.reassertContentProtection();
     this.cropperWindowHelper.reassertContentProtection();
+    this.browserWindowHelper.reassertContentProtection();
   }
 
   public getUndetectable(): boolean {

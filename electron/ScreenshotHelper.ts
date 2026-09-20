@@ -2,7 +2,7 @@
 
 import path from "node:path"
 import fs from "node:fs"
-import { app, desktopCapturer, screen, systemPreferences } from "electron"
+import { app, desktopCapturer, screen, systemPreferences, clipboard, nativeImage } from "electron"
 import { v4 as uuidv4 } from "uuid"
 import util from "util"
 import sharp from "sharp"
@@ -719,6 +719,7 @@ export class ScreenshotHelper {
       }
 
       console.log(`[ScreenshotHelper] Screenshot successful: ${screenshotPath}`);
+      this.copyToClipboard(screenshotPath);
       return screenshotPath
     } catch (error) {
       console.error('[ScreenshotHelper] Failed to take screenshot:', error);
@@ -778,10 +779,25 @@ export class ScreenshotHelper {
         }
       }
 
+      this.copyToClipboard(screenshotPath);
       return screenshotPath
     } catch (error) {
       console.error('[ScreenshotHelper] Failed to take selective screenshot:', error);
       throw error
+    }
+  }
+
+  private copyToClipboard(filePath: string): void {
+    try {
+      if (fs.existsSync(filePath)) {
+        const img = nativeImage.createFromPath(filePath);
+        if (!img.isEmpty()) {
+          clipboard.writeImage(img);
+          console.log(`[ScreenshotHelper] Screenshot copied to clipboard for instant pasting: ${filePath}`);
+        }
+      }
+    } catch (err) {
+      console.warn('[ScreenshotHelper] Failed to copy screenshot to clipboard:', err);
     }
   }
 

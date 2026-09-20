@@ -6,6 +6,7 @@ import HindsightStatusBanner from "./components/HindsightStatusBanner"
 import SettingsPopup from "./components/SettingsPopup" // Keeping for legacy/specific window support if needed
 import Launcher from "./components/Launcher"
 import ModelSelectorWindow from "./components/ModelSelectorWindow"
+import StealthBrowserWindow from "./components/browser/StealthBrowserWindow"
 import SettingsOverlay from "./components/SettingsOverlay"
 import StartupSequence from "./components/StartupSequence"
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion"
@@ -111,6 +112,7 @@ const App: React.FC = () => {
   const isOverlayWindow = new URLSearchParams(window.location.search).get('window') === 'overlay';
   const isModelSelectorWindow = new URLSearchParams(window.location.search).get('window') === 'model-selector';
   const isCropperWindow = new URLSearchParams(window.location.search).get('window') === 'cropper';
+  const isBrowserWindow = new URLSearchParams(window.location.search).get('window') === 'browser';
   const launcherIsolation = getLauncherIsolation();
   const isolateOnboarding = launcherIsolation === 'onboarding' || launcherIsolation === 'global-surfaces';
   const isolatePermissionsToaster = launcherIsolation === 'permissions-toaster';
@@ -118,7 +120,7 @@ const App: React.FC = () => {
   const isolateGlobalSurfaces = launcherIsolation === 'global-surfaces';
 
   // Default to launcher if not specified (dev mode safety)
-  const isDefault = !isSettingsWindow && !isOverlayWindow && !isModelSelectorWindow && !isCropperWindow;
+  const isDefault = !isSettingsWindow && !isOverlayWindow && !isModelSelectorWindow && !isCropperWindow && !isBrowserWindow;
 
   // Initialize Analytics
   useEffect(() => {
@@ -868,6 +870,14 @@ const App: React.FC = () => {
       <React.Suspense fallback={<div className="w-screen h-screen bg-transparent" />}>
         <CropperWindow />
       </React.Suspense>
+    );
+  }
+
+  if (isBrowserWindow) {
+    return (
+      <ErrorBoundary context="StealthBrowserWindow">
+        <StealthBrowserWindow />
+      </ErrorBoundary>
     );
   }
 

@@ -119,6 +119,15 @@ export interface ElectronAPI {
   onSettingsVisibilityChange: (callback: (isVisible: boolean) => void) => () => void
   toggleSettingsWindow: (coords?: { x: number; y: number }) => Promise<void>
   closeSettingsWindow: () => Promise<void>
+
+  // Built-in Stealth Web Browser
+  browserOpen: (url?: string) => Promise<{ success: boolean }>
+  browserToggle: (url?: string) => Promise<{ success: boolean }>
+  browserClose: () => Promise<{ success: boolean }>
+  browserCopyLatestScreenshot: () => Promise<{ success: boolean }>
+  browserTakeSelectiveScreenshot: () => Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }>
+  browserTakeScreenshot: () => Promise<{ success: boolean; error?: string }>
+  onBrowserNavigateTo: (callback: (url: string) => void) => () => void
   toggleAdvancedSettings: () => Promise<void>
   closeAdvancedSettings: () => Promise<void>
   openSettingsTab: (tab: string) => Promise<void>

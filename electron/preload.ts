@@ -46,6 +46,15 @@ interface ElectronAPI {
   windowClose: () => Promise<void>;
   windowIsMaximized: () => Promise<boolean>;
 
+  // Built-in Stealth Web Browser
+  browserOpen: (url?: string) => Promise<{ success: boolean }>;
+  browserToggle: (url?: string) => Promise<{ success: boolean }>;
+  browserClose: () => Promise<{ success: boolean }>;
+  browserCopyLatestScreenshot: () => Promise<{ success: boolean }>;
+  browserTakeSelectiveScreenshot: () => Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }>;
+  browserTakeScreenshot: () => Promise<{ success: boolean; error?: string }>;
+  onBrowserNavigateTo: (callback: (url: string) => void) => () => void;
+
   analyzeImageFile: (path: string) => Promise<void>;
   quitApp: () => Promise<void>;
   restartApp: () => Promise<void>;
@@ -1946,6 +1955,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Settings Window
   toggleSettingsWindow: (coords?: { x: number; y: number }) =>
     ipcRenderer.invoke('toggle-settings-window', coords),
+
+  // Built-in Stealth Web Browser
+  browserOpen: (url?: string) => ipcRenderer.invoke('browser:open', url),
+  browserToggle: (url?: string) => ipcRenderer.invoke('browser:toggle', url),
+  browserClose: () => ipcRenderer.invoke('browser:close'),
+  browserCopyLatestScreenshot: () => ipcRenderer.invoke('browser:copy-latest-screenshot'),
+  browserTakeSelectiveScreenshot: () => ipcRenderer.invoke('browser:take-selective-and-paste'),
+  browserTakeScreenshot: () => ipcRenderer.invoke('browser:take-screenshot-and-paste'),
+  onBrowserNavigateTo: (callback: (url: string) => void) => {
+    const subscription = (_: any, url: string) => callback(url);
+    ipcRenderer.on('browser:navigate-to', subscription);
+    return () => {
+      ipcRenderer.removeListener('browser:navigate-to', subscription);
+    };
+  },
 
   // Groq Fast Text Mode
   getGroqFastTextMode: () => ipcRenderer.invoke('get-groq-fast-text-mode'),

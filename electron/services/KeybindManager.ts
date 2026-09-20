@@ -19,6 +19,7 @@ export const DEFAULT_KEYBINDS: KeybindConfig[] = [
     { id: 'general:reset-cancel', label: 'Reset / Cancel', accelerator: 'CommandOrControl+R', isGlobal: true, defaultAccelerator: 'CommandOrControl+R' },
     { id: 'general:take-screenshot', label: 'Take Screenshot', accelerator: 'CommandOrControl+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+H' },
     { id: 'general:selective-screenshot', label: 'Selective Screenshot', accelerator: 'CommandOrControl+Shift+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+H' },
+    { id: 'general:toggle-browser', label: 'Toggle Stealth Web Browser', accelerator: 'CommandOrControl+Shift+W', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+W' },
     // Capture the active browser tab's page context via the companion extension;
     // falls back to a screenshot when no extension/browser is reachable. Works
     // from any focused app (including the Natively overlay), which the old
@@ -100,6 +101,7 @@ export class KeybindManager {
         // Browser/page capture must work globally in both modes (same rationale
         // as the screenshot shortcuts — it's a global capture trigger).
         if (actionId === 'general:capture-dom') return true;
+        if (actionId === 'general:toggle-browser') return true;
 
         return false;
     }

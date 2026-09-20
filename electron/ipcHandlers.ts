@@ -4678,6 +4678,65 @@ export function initializeIpcHandlers(appState: AppState): void {
     appState.settingsWindowHelper.closeWindow();
   });
 
+  // Built-in Stealth Web Browser
+  safeHandle('browser:open', async (_, url?: string) => {
+    appState.browserWindowHelper.showWindow(url);
+    return { success: true };
+  });
+
+  safeHandle('browser:toggle', async (_, url?: string) => {
+    appState.browserWindowHelper.toggleWindow(url);
+    return { success: true };
+  });
+
+  safeHandle('browser:close', async () => {
+    appState.browserWindowHelper.hideWindow();
+    return { success: true };
+  });
+
+  safeHandle('browser:copy-latest-screenshot', async () => {
+    const copied = appState.browserWindowHelper.copyLatestScreenshotToClipboard();
+    return { success: copied };
+  });
+
+  safeHandle('browser:take-selective-and-paste', async () => {
+    try {
+      const screenshotPath = await appState.takeSelectiveScreenshot();
+      appState.browserWindowHelper.copyLatestScreenshotToClipboard();
+      const browserWin = appState.browserWindowHelper.getWindow();
+      if (browserWin && !browserWin.isDestroyed()) {
+        browserWin.show();
+        browserWin.focus();
+      }
+      return { success: true, path: screenshotPath };
+    } catch (err: any) {
+      if (err?.message === 'Selection cancelled') {
+        const browserWin = appState.browserWindowHelper.getWindow();
+        if (browserWin && !browserWin.isDestroyed()) {
+          browserWin.show();
+          browserWin.focus();
+        }
+        return { success: false, cancelled: true };
+      }
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  safeHandle('browser:take-screenshot-and-paste', async () => {
+    try {
+      await appState.takeScreenshot();
+      appState.browserWindowHelper.copyLatestScreenshotToClipboard();
+      const browserWin = appState.browserWindowHelper.getWindow();
+      if (browserWin && !browserWin.isDestroyed()) {
+        browserWin.show();
+        browserWin.focus();
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
   safeHandle('set-undetectable', async (_, state: boolean) => {
     appState.setUndetectable(state);
     // Return the AUTHORITATIVE final state so the renderer can reconcile / roll
