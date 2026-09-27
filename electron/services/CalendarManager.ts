@@ -4,6 +4,8 @@ import url from 'url';
 import fs from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
+import { CredentialsManager } from './CredentialsManager';
+import { encryptCredentialBlob, decryptCredentialBlob } from './credentialFallbackCrypto';
 
 // Configuration
 // GOOGLE_CLIENT_SECRET is intentionally NOT referenced here — the desktop app
@@ -262,10 +264,8 @@ export class CalendarManager extends EventEmitter {
     // =========================================================================
 
     private saveTokens() {
-        if (!safeStorage.isEncryptionAvailable()) {
-            console.warn('[CalendarManager] Encryption not available, skipping token save');
-            return;
-        }
+        const credsMgr = CredentialsManager.getInstance();
+        const useKeyring = credsMgr.isKeyringSafe() && safeStorage.isEncryptionAvailable();
 
         const data = JSON.stringify({
             accessToken: this.accessToken,
@@ -273,20 +273,54 @@ export class CalendarManager extends EventEmitter {
             expiryDate: this.expiryDate
         });
 
-        const encrypted = safeStorage.encryptString(data);
-        const tmpPath = TOKEN_PATH + '.tmp';
-        fs.writeFileSync(tmpPath, encrypted);
-        fs.renameSync(tmpPath, TOKEN_PATH);
+        if (useKeyring) {
+            try {
+                const encrypted = safeStorage.encryptString(data);
+                const tmpPath = TOKEN_PATH + '.tmp';
+                fs.writeFileSync(tmpPath, encrypted);
+                fs.renameSync(tmpPath, TOKEN_PATH);
+                return;
+            } catch (err) {
+                console.warn('[CalendarManager] Keyring save failed, falling back to app-managed crypto:', err);
+            }
+        }
+
+        try {
+            const blob = encryptCredentialBlob(data, credsMgr.getFallbackKey());
+            const tmpPath = TOKEN_PATH + '.tmp';
+            fs.writeFileSync(tmpPath, blob);
+            fs.renameSync(tmpPath, TOKEN_PATH);
+        } catch (err) {
+            console.error('[CalendarManager] Failed to save tokens with fallback crypto:', err);
+        }
     }
 
     private loadTokens() {
         if (!fs.existsSync(TOKEN_PATH)) return;
 
         try {
-            if (!safeStorage.isEncryptionAvailable()) return;
-
+            const credsMgr = CredentialsManager.getInstance();
             const encrypted = fs.readFileSync(TOKEN_PATH);
-            const decrypted = safeStorage.decryptString(encrypted);
+            let decrypted: string | null = null;
+
+            if (credsMgr.isKeyringSafe() && safeStorage.isEncryptionAvailable()) {
+                try {
+                    decrypted = safeStorage.decryptString(encrypted);
+                } catch {
+                    decrypted = null;
+                }
+            }
+
+            if (!decrypted) {
+                try {
+                    decrypted = decryptCredentialBlob(encrypted, credsMgr.getFallbackKey());
+                } catch {
+                    decrypted = null;
+                }
+            }
+
+            if (!decrypted) return;
+
             const data = JSON.parse(decrypted);
 
             this.accessToken = data.accessToken;

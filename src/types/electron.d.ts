@@ -1,3 +1,5 @@
+import type { AntigravityConfig, AntigravityConfigResult, AntigravityStatus, AntigravityTestResult } from './antigravity';
+
 // Phase 3 — DynamicActionPayload mirrors electron/services/dynamic-actions/DynamicAction.ts.
 // Kept as a structural interface (not a class import) to preserve the strict main↔renderer
 // type boundary — the renderer never imports from electron/* directly.
@@ -135,7 +137,7 @@ export interface ElectronAPI {
   onOpenSettingsTab: (callback: (tab: string) => void) => () => void
 
   // LLM Model Management
-  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini" | "custom" | "codex-cli"; /** @deprecated use `modelId` for selection, `displayName` for UI */ model: string; modelId: string; displayName: string; isOllama: boolean }>
+  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini" | "custom" | "codex-cli" | "antigravity"; /** @deprecated use `modelId` for selection, `displayName` for UI */ model: string; modelId: string; displayName: string; isOllama: boolean }>
   getAvailableOllamaModels: () => Promise<string[]>
   getProviderStatuses: () => Promise<any[]>
   getProviderStatus: (id: string) => Promise<any | null>
@@ -383,7 +385,7 @@ export interface ElectronAPI {
   onSessionReset: (callback: () => void) => () => void;
 
   // Streaming listeners
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean, ignoreKnowledgeMode?: boolean }) => Promise<void>
+  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean, ignoreKnowledgeMode?: boolean, referenceText?: string }) => Promise<void>
   onGeminiStreamToken: (callback: (token: string, meta?: { streamId?: number }) => void) => () => void
   onGeminiStreamDone: (callback: (data?: { finalText?: string; streamId?: number }) => void) => () => void
   onGeminiStreamError: (callback: (error: string) => void) => () => void;
@@ -409,6 +411,10 @@ export interface ElectronAPI {
   // Groq Fast Text Mode
   getGroqFastTextMode: () => Promise<{ enabled: boolean }>;
   setGroqFastTextMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  getAntigravityConfig: () => Promise<AntigravityConfig>;
+  setAntigravityConfig: (config: Partial<AntigravityConfig>) => Promise<AntigravityConfigResult>;
+  getAntigravityStatus: () => Promise<AntigravityStatus>;
+  testAntigravity: (config?: Partial<AntigravityConfig>) => Promise<AntigravityTestResult>;
   getCodexCliConfig: () => Promise<{ enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string }>;
   setCodexCliConfig: (config: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode?: string; serviceTier?: string; modelReasoningEffort?: string }) => Promise<{ success: boolean; error?: string; config?: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string } }>;
   testCodexCli: (config?: { enabled?: boolean; path?: string; model?: string; fastModel?: string; timeoutMs?: number; sandboxMode?: string; serviceTier?: string; modelReasoningEffort?: string }) => Promise<{ success: boolean; error?: string; resolvedPath?: string; config?: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string } }>;
@@ -441,7 +447,7 @@ export interface ElectronAPI {
   openMailto: (params: { to: string; subject: string; body: string }) => Promise<{ success: boolean; error?: string }>;
 
   // Audio Test
-  startAudioTest: (deviceId?: string) => Promise<{ success: boolean }>;
+  startAudioTest: (deviceId?: string, outputDeviceId?: string) => Promise<{ success: boolean }>;
   stopAudioTest: () => Promise<{ success: boolean }>;
   onAudioTestLevel: (callback: (level: number) => void) => () => void;
   // UX4: parallel system-audio probe — level + error events emitted during

@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useT } from '../../i18n';
 import { Plus, Trash2, Edit2, AlertCircle, CheckCircle, Save, ChevronDown, Check, RefreshCw, ExternalLink, Loader2, LogOut } from 'lucide-react';
-import { CODEX_CLI_MODEL, CODEX_CLI_MODEL_PRESETS, codexCliSelectorId, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
+import { ANTIGRAVITY_MODEL, getAntigravityModelDisplayName, CODEX_CLI_MODEL, CODEX_CLI_MODEL_PRESETS, codexCliSelectorId, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
 import { ProviderCard } from './ProviderCard';
+import { AntigravitySettings } from './AntigravitySettings';
+import { DEFAULT_ANTIGRAVITY_CONFIG, type AntigravityConfig } from '../../types/antigravity';
 
 const CODEX_SERVICE_TIERS = ['default', 'fast', 'flex'] as const;
 // Must mirror CodexCliService.CODEX_MODEL_REASONING_EFFORTS in
@@ -233,6 +235,8 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
     const [ollamaRestarted, setOllamaRestarted] = useState(false);
     const [isRefreshingOllama, setIsRefreshingOllama] = useState(false);
 
+    const [antigravityConfig, setAntigravityConfig] = useState<AntigravityConfig>(DEFAULT_ANTIGRAVITY_CONFIG);
+
     // --- Local (Codex CLI) ---
     const [codexCliConfig, setCodexCliConfig] = useState({ enabled: false, path: 'codex', model: 'gpt-5.4', fastModel: 'gpt-5.3-codex-spark', timeoutMs: 60000, sandboxMode: 'read-only' as string, serviceTier: 'default', modelReasoningEffort: undefined as string | undefined });
     const [codexCliStatus, setCodexCliStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
@@ -306,6 +310,9 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                 // @ts-ignore
                 const cliConfig = await window.electronAPI?.getCodexCliConfig?.();
                 if (cliConfig) setCodexCliConfig(cliConfig as typeof codexCliConfig);
+
+                const antigravity = await window.electronAPI?.getAntigravityConfig?.();
+                if (antigravity) setAntigravityConfig(antigravity);
 
                 // Codex OAuth status — read once on mount so the Settings UI
                 // shows the right state without waiting for a user click.
@@ -397,6 +404,9 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
         if (hasStoredKey.litellm) {
             litellmModels.forEach(model => opts.push({ id: `litellm/${model}`, name: `${prettifyModelId(model)} (LiteLLM)` }));
         }
+        if (antigravityConfig.enabled) {
+            opts.push({ id: ANTIGRAVITY_MODEL.id, name: getAntigravityModelDisplayName(antigravityConfig.model) });
+        }
         customProviders.forEach(p => opts.push({ id: p.id, name: p.name }));
         ollamaModels.forEach(m => opts.push({ id: `ollama-${m}`, name: `${m} (Local)` }));
         return opts;
@@ -412,7 +422,7 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
         const next = opts[0].id;
         setDefaultModel(next);
         window.electronAPI?.setDefaultModel?.(next).catch(console.error);
-    }, [credentialsLoaded, defaultModel, hasStoredKey, preferredModels, isCodexReady, codexCliConfig.model, customProviders, ollamaModels, litellmModels]);
+    }, [credentialsLoaded, defaultModel, hasStoredKey, preferredModels, isCodexReady, codexCliConfig.model, antigravityConfig, customProviders, ollamaModels, litellmModels]);
 
     // Load LiteLLM model IDs only when the proxy is configured. The active-model
     // selector should not expose stale `litellm/...` choices after the proxy is
@@ -1413,6 +1423,14 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                     )}
                 </div>
             </div>
+
+            <AntigravitySettings
+                config={antigravityConfig}
+                onConfigChange={setAntigravityConfig}
+                onSelected={() => {
+                    setDefaultModel(ANTIGRAVITY_MODEL.id);
+                }}
+            />
 
             {/* Local (Ollama) Providers */}
             <div className="space-y-5">

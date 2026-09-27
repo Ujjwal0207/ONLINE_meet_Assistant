@@ -17,8 +17,8 @@ export const DEFAULT_KEYBINDS: KeybindConfig[] = [
     { id: 'general:process-screenshots', label: 'Process Screenshots', accelerator: 'CommandOrControl+Enter', isGlobal: true, defaultAccelerator: 'CommandOrControl+Enter' },
     { id: 'general:capture-and-process', label: 'Capture Screen & Ask AI (Global)', accelerator: 'CommandOrControl+Shift+Enter', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+Enter' },
     { id: 'general:reset-cancel', label: 'Reset / Cancel', accelerator: 'CommandOrControl+R', isGlobal: true, defaultAccelerator: 'CommandOrControl+R' },
-    { id: 'general:take-screenshot', label: 'Take Screenshot', accelerator: 'CommandOrControl+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+H' },
-    { id: 'general:selective-screenshot', label: 'Selective Screenshot', accelerator: 'CommandOrControl+Shift+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+H' },
+    { id: 'general:take-screenshot', label: 'Take Screenshot', accelerator: 'CommandOrControl+Shift+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+H' },
+    { id: 'general:selective-screenshot', label: 'Selective Screenshot', accelerator: 'CommandOrControl+Alt+Shift+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+Alt+Shift+H' },
     { id: 'general:toggle-browser', label: 'Toggle Stealth Web Browser', accelerator: 'CommandOrControl+Shift+W', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+W' },
     // Capture the active browser tab's page context via the companion extension;
     // falls back to a screenshot when no extension/browser is reachable. Works
@@ -91,7 +91,7 @@ export class KeybindManager {
         if (actionId.startsWith('window:move-')) return true;
 
         // Screenshot & screen-analyze shortcuts must work globally in BOTH modes.
-        // Without these, Cmd+H / Cmd+Shift+H / Cmd+Shift+Enter do nothing in
+        // Without these, Cmd+Shift+H / Cmd+Alt+Shift+H / Cmd+Shift+Enter do nothing in
         // launcher mode because globalShortcut.register() is never called for them.
         // Also fixes the silent rebind failure: re-registration after setKeybind()
         // hit the same gate and dropped the newly bound accelerator too.
@@ -160,6 +160,31 @@ export class KeybindManager {
                     }
                 }
 
+                // Command+H is macOS's standard "Hide application" shortcut, so
+                // it is a poor global default for a capture action. Move existing
+                // installations from the old default pair without requiring each
+                // user to manually reset their shortcuts. The area action moves out
+                // of the way at the same time, preserving both capture actions.
+                const legacyFullScreenshot = 'CommandOrControl+H';
+                const legacySelectiveScreenshot = 'CommandOrControl+Shift+H';
+                const fullScreenshot = data.find((kb: { id?: string }) => kb.id === 'general:take-screenshot');
+                const selectiveScreenshot = data.find((kb: { id?: string }) => kb.id === 'general:selective-screenshot');
+                let migratedScreenshotShortcuts = false;
+                if (
+                    fullScreenshot &&
+                    this.normalizeAccelerator(fullScreenshot.accelerator || '') === this.normalizeAccelerator(legacyFullScreenshot)
+                ) {
+                    fullScreenshot.accelerator = 'CommandOrControl+Shift+H';
+                    migratedScreenshotShortcuts = true;
+                }
+                if (
+                    selectiveScreenshot &&
+                    this.normalizeAccelerator(selectiveScreenshot.accelerator || '') === this.normalizeAccelerator(legacySelectiveScreenshot)
+                ) {
+                    selectiveScreenshot.accelerator = 'CommandOrControl+Alt+Shift+H';
+                    migratedScreenshotShortcuts = true;
+                }
+
                 // Validate and merge
                 let hadConflicts = false;
                 for (const fileKb of data) {
@@ -191,7 +216,7 @@ export class KeybindManager {
                 }
 
                 // EC-03 fix: persist resolved conflicts so they are not re-detected on next launch
-                if (hadConflicts) {
+                if (hadConflicts || migratedScreenshotShortcuts) {
                     this.save();
                 }
             }
@@ -404,8 +429,8 @@ export class KeybindManager {
                     { type: 'separator' },
                     { role: 'services' },
                     { type: 'separator' },
-                    { role: 'hide', accelerator: 'CommandOrControl+Option+H' },
-                    { role: 'hideOthers', accelerator: 'CommandOrControl+Option+Shift+H' },
+                    { role: 'hide', accelerator: 'CommandOrControl+H' },
+                    { role: 'hideOthers', accelerator: 'CommandOrControl+Option+H' },
                     { role: 'unhide' },
                     { type: 'separator' },
                     { role: 'quit' }

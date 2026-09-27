@@ -1559,18 +1559,31 @@ export class AppState {
           // Adapted from public PR #113 — verify premium interaction
           this.toggleOverlayMousePassthrough();
         } else if (actionId === 'general:take-screenshot') {
-          // Route to renderer via global-shortcut so the renderer handles the
-          // screenshot through the IPC invoke path (request/response guarantee).
-          // The old pattern — main takes screenshot → fires screenshot-taken event →
-          // renderer listener catches it — was unreliable in overlay mode because the
-          // fire-and-forget event could be missed if the listener registration had any
-          // timing gap. The invoke path used by generalHandlers.takeScreenshot() is
-          // already proven to work for UI-button screenshots; reuse it here.
-          const mainWindow = this.getMainWindow();
-          this.sendToWindow(mainWindow, 'global-shortcut', { action: 'takeScreenshot' });
+          try {
+            const screenshotPath = await this.takeScreenshot(false);
+            const preview = await this.getImagePreview(screenshotPath);
+            this.broadcastScreenshotAttached({ path: screenshotPath, preview });
+            this.showMainWindow(false);
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            if (reason === 'Screenshot capture already in progress') return;
+            console.error('[Main] Global take-screenshot failed:', err);
+            this.sendSystemAudioPermissionDenied(`Unable to capture the screen: ${reason}`);
+            this.showMainWindow(false);
+          }
         } else if (actionId === 'general:selective-screenshot') {
-          const mainWindow = this.getMainWindow();
-          this.sendToWindow(mainWindow, 'global-shortcut', { action: 'selectiveScreenshot' });
+          try {
+            const screenshotPath = await this.takeSelectiveScreenshot(false);
+            const preview = await this.getImagePreview(screenshotPath);
+            this.broadcastScreenshotAttached({ path: screenshotPath, preview });
+            this.showMainWindow(false);
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            if (reason === 'Selection cancelled' || reason === 'Screenshot capture already in progress') return;
+            console.error('[Main] Global selective-screenshot failed:', err);
+            this.sendSystemAudioPermissionDenied(`Unable to capture the selected area: ${reason}`);
+            this.showMainWindow(false);
+          }
         } else if (actionId === 'general:capture-and-process') {
           // Single-trigger: capture current screen then immediately request AI analysis
           await this.captureScreenAndProcess();
@@ -1719,6 +1732,7 @@ export class AppState {
         llmHelper.setGroqFastTextMode(true);
         console.log('[AppState] Fast mode restored from settings');
       }
+      llmHelper.setAntigravityConfig(settingsManager.get('antigravityConfig') || {});
       llmHelper.setCodexCliConfig({
         enabled: !!settingsManager.get('codexCliEnabled'),
         path: settingsManager.get('codexCliPath') || 'codex',
@@ -1903,6 +1917,12 @@ export class AppState {
     };
     sendOnce(this.windowHelper.getLauncherWindow());
     sendOnce(this.windowHelper.getOverlayWindow());
+  }
+
+  public broadcastScreenshotAttached(data: { path: string; preview: string }): void {
+    console.log('[Main] Broadcasting screenshot to meeting surfaces:', data.path);
+    this.sendToMeetingSurfaces('screenshot-taken', data);
+    this.sendToMeetingSurfaces('screenshot-attached', data);
   }
 
   private sendToSettingsSurfaces(channel: string, ...args: any[]): void {
@@ -2716,7 +2736,8 @@ export class AppState {
   private systemAudioCapture: SystemAudioCapture | null = null;
   private microphoneCapture: MicrophoneCapture | null = null;
   private audioTestCapture: MicrophoneCapture | null = null; // For audio settings test
-  private _audioTestStarting = false;               // P2-12: in-flight guard against concurrent calls
+  private _audioTestStartPromise: Promise<void> | null = null;
+  private _audioTestTeardown: Promise<void> = Promise.resolve();
   private googleSTT: STTProvider | null = null; // Interviewer
   private googleSTT_User: STTProvider | null = null; // User
 
@@ -4776,10 +4797,7 @@ export class AppState {
   }
 
 
-  public async startAudioTest(deviceId?: string): Promise<void> {
-    // P2-12: guard against two concurrent calls both passing the async permission check
-    // before either has created a capture — the second call would orphan the first capture.
-    if (this._audioTestStarting) return;
+  public async startAudioTest(deviceId?: string, outputDeviceId?: string): Promise<void> {
     // Block audio test while a meeting is live. Both code paths construct
     // their own MicrophoneCapture instance against the same device; on Windows
     // cpal grants exclusive access, so the second open silently degrades, and
@@ -4791,11 +4809,20 @@ export class AppState {
     if (this.isMeetingActive) {
       throw new Error('Audio test is unavailable while a meeting is active. End the meeting first, then test your microphone.');
     }
-    this._audioTestStarting = true;
+    // Cancel earlier requests immediately, then serialize native startup. A
+    // device change while permission is pending must not be silently dropped.
+    this.stopAudioTest();
+    const startEpoch = this._audioTestEpoch;
+    const previousStart = this._audioTestStartPromise ?? Promise.resolve();
+    const pendingStart = previousStart.catch(() => {}).then(async () => {
+      if (this._audioTestEpoch !== startEpoch || this.isMeetingActive) return;
+      await this._startAudioTestImpl(deviceId, outputDeviceId, startEpoch);
+    });
+    this._audioTestStartPromise = pendingStart;
     try {
-      await this._startAudioTestImpl(deviceId);
+      await pendingStart;
     } finally {
-      this._audioTestStarting = false;
+      if (this._audioTestStartPromise === pendingStart) this._audioTestStartPromise = null;
     }
   }
 
@@ -4824,16 +4851,17 @@ export class AppState {
   // (which owns the CoreAudio tap) is debounced.
   private _audioTestSystemProbeTimer: NodeJS.Timeout | null = null;
 
-  private async _startAudioTestImpl(deviceId?: string): Promise<void> {
+  private async _startAudioTestImpl(deviceId?: string, outputDeviceId?: string, startEpoch = this._audioTestEpoch): Promise<void> {
     console.log(`[Main] Starting Audio Test on device: ${deviceId || 'default'}`);
-    this.stopAudioTest(); // Stop any existing test (also bumps _audioTestEpoch)
-    // UX4 hardening: snapshot epoch BEFORE the system-audio probe's awaited
-    // permission probe. If stopAudioTest fires while we're awaiting, the
-    // post-await check below catches it and skips system-capture construction.
-    const startEpoch = ++this._audioTestEpoch;
-    const isCurrentTest = () => this._audioTestEpoch === startEpoch;
+    const isCurrentTest = () => this._audioTestEpoch === startEpoch && !this.isMeetingActive;
+    await this._audioTestTeardown;
+    if (!isCurrentTest()) return;
 
-    if (!(await ensureMacMicrophoneAccess('audio test'))) {
+    const microphoneAllowed = await ensureMacMicrophoneAccess('audio test');
+    // Closing Settings or choosing another mic while the OS prompt is open
+    // cancels this request before any native microphone handle is created.
+    if (!isCurrentTest()) return;
+    if (!microphoneAllowed) {
       throw new Error(formatPermissionMessage('mic-denied'));
     }
 
@@ -4860,6 +4888,7 @@ export class AppState {
 
     const attachAudioTestListeners = (capture: MicrophoneCapture) => {
       capture.on('data', (chunk: Buffer) => {
+        if (!isCurrentTest()) return;
         const targets = broadcastTargets();
         if (targets.length === 0) return;
         const level = computeRmsLevel(chunk);
@@ -4879,6 +4908,7 @@ export class AppState {
     // the entire probe = TCC silently denied even though SCK started).
     const attachSystemTestListeners = (capture: SystemAudioCapture) => {
       capture.on('data', (chunk: Buffer) => {
+        if (!isCurrentTest()) return;
         const targets = broadcastTargets();
         if (targets.length === 0) return;
         const level = computeRmsLevel(chunk);
@@ -4887,6 +4917,7 @@ export class AppState {
         }
       });
       capture.on('error', (err: Error) => {
+        if (!isCurrentTest()) return;
         console.error('[Main] AudioTest System Error:', err);
         for (const target of broadcastTargets()) {
           this.sendToWindow(target, 'audio-test-system-error', err.message || String(err));
@@ -4904,9 +4935,10 @@ export class AppState {
       // the fallback to prevent a brief double-microphone-capture window.
       try {
         this.audioTestCapture?.disablePreWarm();
-        this.audioTestCapture?.stop();
+        await this.audioTestCapture?.stop();
       } catch { /* ignore errors on already-failed capture */ }
       this.audioTestCapture = null;
+      if (!isCurrentTest()) return;
       try {
         this.audioTestCapture = new MicrophoneCapture();
         attachAudioTestListeners(this.audioTestCapture);
@@ -4959,7 +4991,7 @@ export class AppState {
             return;
           }
           try {
-            this.audioTestSystemCapture = new SystemAudioCapture();
+            this.audioTestSystemCapture = new SystemAudioCapture(outputDeviceId || undefined);
             attachSystemTestListeners(this.audioTestSystemCapture);
             // INVARIANT: SystemAudioCapture.start() MUST remain synchronous (its
             // native CoreAudio init runs on a background thread and start()
@@ -5016,21 +5048,23 @@ export class AppState {
     // Also disable pre-warm so stop() doesn't pre-warm a new monitor that would
     // keep the DSP thread alive after the settings panel is closed. Mirrors
     // the endMeeting() pattern where disablePreWarm() is called before stop().
+    const teardowns: Promise<void>[] = [this._audioTestTeardown];
     this.audioTestCapture?.disablePreWarm();
     if (this.audioTestCapture) {
       console.log('[Main] Stopping Audio Test');
-      this.audioTestCapture.stop();
+      teardowns.push(this.audioTestCapture.stop());
       this.audioTestCapture = null;
     }
     // UX4: also stop the parallel system probe.
     if (this.audioTestSystemCapture) {
       try {
-        this.audioTestSystemCapture.stop();
+        teardowns.push(this.audioTestSystemCapture.stop());
       } catch (e) {
         console.warn('[Main] Stopping system audio test threw:', e);
       }
       this.audioTestSystemCapture = null;
     }
+    this._audioTestTeardown = Promise.all(teardowns).then(() => {});
   }
 
   public finalizeMicSTT(): void {
@@ -5071,16 +5105,7 @@ export class AppState {
     if (!(await ensureMacMicrophoneAccess('meeting start'))) {
       const message = formatPermissionMessage('mic-denied');
       this.broadcast('meeting-audio-error', message);
-      // Tag the thrown error so the renderer's start-meeting caller (still on
-      // the launcher — the overlay/meeting surface hasn't been shown yet, so
-      // the in-overlay audio banner would not be visible) can recognise this
-      // as a recoverable mic-permission denial and re-open the permissions
-      // card instead of failing silently with only a console.error. Pre-fix,
-      // a denied/revoked mic grant made "Start Natively" do nothing on screen.
-      const err = new Error(message) as Error & { code?: string; channel?: string };
-      err.code = 'mic-permission-denied';
-      err.channel = 'mic';
-      throw err;
+      console.warn('[Main] Microphone access not granted on macOS. Proceeding with assistant in visual/chat mode:', message);
     }
 
     // Check Screen Recording permission required for system audio capture
@@ -6037,21 +6062,13 @@ export class AppState {
     };
   }
 
-  private getDisplayById(displayId: number | null): Electron.Display | undefined {
-    if (displayId === null) return undefined;
-    return screen.getAllDisplays().find(display => display.id === displayId);
-  }
-
-  private getTargetDisplayForFullScreenshot(session: ScreenshotCaptureSession): Electron.Display {
-    if (session.windowMode === 'overlay' && session.overlayBounds) {
-      return screen.getDisplayMatching(session.overlayBounds);
-    }
-
-    const lastOverlayDisplay = this.getDisplayById(session.overlayDisplayId);
-    if (lastOverlayDisplay) {
-      return lastOverlayDisplay;
-    }
-
+  private getTargetDisplayForFullScreenshot(): Electron.Display {
+    // A global capture is meant to capture the app the user is currently looking
+    // at, not the monitor where Natively was last shown. In particular, a
+    // multi-monitor user may leave the assistant on one display and move to a
+    // browser, IDE, or document on another. The cursor is the only reliable
+    // cross-platform indication of the intended display once the overlay has
+    // been hidden for capture.
     return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   }
 
@@ -6136,8 +6153,8 @@ export class AppState {
 
   // Screenshot management methods
   public async takeScreenshot(restoreFocus: boolean = true): Promise<string> {
-    return this.withScreenshotCaptureSession('full', restoreFocus, (session) =>
-      this.screenshotHelper.takeScreenshot(this.getTargetDisplayForFullScreenshot(session))
+    return this.withScreenshotCaptureSession('full', restoreFocus, () =>
+      this.screenshotHelper.takeScreenshot(this.getTargetDisplayForFullScreenshot())
     )
   }
 
@@ -6264,14 +6281,14 @@ export class AppState {
     if (!this.tray) return;
 
     const keybindManager = KeybindManager.getInstance();
-    const screenshotAccel = keybindManager.getKeybind('general:take-screenshot') || 'CommandOrControl+H';
+    const screenshotAccel = keybindManager.getKeybind('general:take-screenshot') || 'CommandOrControl+Shift+H';
 
     console.log('[Main] updateTrayMenu called. Screenshot Accelerator:', screenshotAccel);
 
     // Update tooltip for verification
     this.tray.setToolTip('Natively');
 
-    // Helper to format accelerator for display (e.g. CommandOrControl+H -> Cmd+H)
+    // Helper to format accelerator for display (e.g. CommandOrControl+Shift+H -> Cmd+Shift+H)
     const formatAccel = (accel: string) => {
       return accel
         .replace('CommandOrControl', 'Cmd')
@@ -6310,8 +6327,7 @@ export class AppState {
           try {
             const screenshotPath = await this.takeScreenshot()
             const preview = await this.getImagePreview(screenshotPath)
-            const mainWindow = this.getMainWindow()
-            this.sendToWindow(mainWindow, 'screenshot-taken', {
+            this.broadcastScreenshotAttached({
               path: screenshotPath,
               preview,
             })

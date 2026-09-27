@@ -151,6 +151,63 @@ function decodeWritten(buf) {
 }
 
 describe('captureWithDesktopCapturer runtime (single display, mocked Electron)', () => {
+  test('empty screen thumbnail fails before an unusable attachment is written', async () => {
+    currentThumbnail = makeThumbnail(0, 0);
+    const restore = interceptWrites();
+    try {
+      const helper = new ScreenshotHelper('queue');
+      await assert.rejects(helper.captureWithDesktopCapturer('/tmp/empty-capture.png'), /empty image/);
+      assert.equal(writtenFiles.length, 0);
+    } finally {
+      restore();
+    }
+  });
+
+  test('empty PNG data fails before writing an attachment', async () => {
+    currentThumbnail = makeThumbnail(BOUNDS.width, BOUNDS.height);
+    currentThumbnail.toPNG = () => Buffer.alloc(0);
+    const restore = interceptWrites();
+    try {
+      const helper = new ScreenshotHelper('queue');
+      await assert.rejects(helper.captureWithDesktopCapturer('/tmp/empty-capture.png'), /empty PNG/);
+      assert.equal(writtenFiles.length, 0);
+    } finally {
+      restore();
+    }
+  });
+
+  test('Windows full screenshot preserves the selected monitor in both queues', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    const external = { id: 2, scaleFactor: 1, bounds: { x: 1440, y: 0, width: 1920, height: 1080 } };
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      for (const view of ['queue', 'solutions']) {
+        const helper = new ScreenshotHelper(view);
+        let capturedDisplay;
+        helper.captureWithDesktopCapturer = async (_path, _area, display) => { capturedDisplay = display; };
+        await helper.takeScreenshot(external);
+        assert.equal(capturedDisplay, external);
+      }
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
+  test('macOS native fallback preserves the selected monitor bounds', { skip: process.platform !== 'darwin' }, async () => {
+    const external = { id: 2, scaleFactor: 1, bounds: { x: 1440, y: 0, width: 1920, height: 1080 } };
+    for (const view of ['queue', 'solutions']) {
+      const helper = new ScreenshotHelper(view);
+      helper.captureWithDesktopCapturer = async () => { throw new Error('compositor unavailable'); };
+      let requestedBounds;
+      helper.getScreenshotCommand = (_path, _interactive, area) => {
+        requestedBounds = area;
+        return '/usr/bin/true'; // Exercise fallback without taking a real screenshot.
+      };
+      await helper.takeScreenshot(external);
+      assert.deepEqual(requestedBounds, external.bounds);
+    }
+  });
+
   test('Fix #1: 1× thumbnail + bottom-right selection writes a density-correct crop, NOT the full screen', async () => {
     // Electron hands back a LOGICAL (1×) thumbnail — the exact case the old
     // `* scaleFactor` math turned into a full-screen write.

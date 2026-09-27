@@ -192,6 +192,32 @@ test('reset aborts an in-flight WTA request without delivering a final answer', 
   assert.ok(!finals.includes('answer that reset must suppress'));
 });
 
+test('Antigravity uses its configured WTA timeout and surfaces the timeout instead of a fabricated fallback', async () => {
+  const { engine } = await makeEngine();
+  engine.getLLMHelper().isUsingAntigravity = () => true;
+  engine.getLLMHelper().getAntigravityConfig = () => ({ timeoutMs: 50 });
+  const errors = [];
+  const finals = [];
+  let requestSignal;
+  engine.on('error', error => errors.push(error));
+  engine.on('suggested_answer', answer => finals.push(answer));
+  engine.whatToAnswerLLM = {
+    async *generateStream(...args) {
+      requestSignal = args.at(-1);
+      await new Promise(resolve => requestSignal.addEventListener('abort', resolve, { once: true }));
+    },
+  };
+
+  const result = await engine.runWhatShouldISay(undefined, 0.9, undefined, { skipCooldown: true });
+
+  assert.equal(result, null);
+  assert.equal(requestSignal.aborted, true, 'deadline must cancel the upstream request');
+  assert.equal(requestSignal.reason, 'first_useful_timeout');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Antigravity.*timed out/);
+  assert.deepEqual(finals, [], 'a CLI failure must not become a generic profile answer');
+});
+
 test('the type contract preserves generationId as an optional 4th arg (backward compatible)', () => {
   // Source-shape regression guard: every `emit('suggested_answer', …)`
   // call site in the WTA path now passes an extra 5th arg

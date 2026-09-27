@@ -1458,7 +1458,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                         </div>
                                     </div>
                                     <div className="flex gap-1 shrink-0">
-                                        {(shortcuts.takeScreenshot || [getModifierSymbol('cmd'), 'H']).map((key: string, i: number) => <span key={i} className={kbdClass}>{key}</span>)}
+                                        {(shortcuts.takeScreenshot || [getModifierSymbol('cmd'), getModifierSymbol('shift'), 'H']).map((key: string, i: number) => <span key={i} className={kbdClass}>{key}</span>)}
                                     </div>
                                 </div>
 

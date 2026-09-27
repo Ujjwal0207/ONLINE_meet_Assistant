@@ -42,6 +42,15 @@ export const STANDARD_CLOUD_MODELS: Record<string, {
     },
 };
 
+export const ANTIGRAVITY_MODEL = {
+    id: 'antigravity',
+    name: 'Antigravity',
+    desc: 'Your Antigravity account via the official CLI',
+};
+
+export const getAntigravityModelDisplayName = (model?: string): string =>
+    model ? `${ANTIGRAVITY_MODEL.name} (${model})` : ANTIGRAVITY_MODEL.name;
+
 export const CODEX_CLI_MODEL = {
     id: 'codex-cli',
     name: 'Codex CLI',
@@ -68,5 +77,6 @@ export const getCodexCliModelDisplayName = (id: string): string | null => {
 
 export const prettifyModelId = (id: string): string => {
     if (!id) return '';
+    if (id === ANTIGRAVITY_MODEL.id) return ANTIGRAVITY_MODEL.name;
     return id.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 };

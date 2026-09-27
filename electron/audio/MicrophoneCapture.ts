@@ -90,8 +90,7 @@ export class MicrophoneCapture extends EventEmitter {
         if (this.isRecording) return;
 
         if (!RustMicCapture) {
-            console.error('[MicrophoneCapture] Cannot start: Rust module missing');
-            return;
+            throw new Error('Microphone capture is unavailable because the native audio module could not be loaded. Rebuild or reinstall Natively, then try again.');
         }
 
         // PRIMARY construction site (lazy init). The wrapper does NOT construct
@@ -181,9 +180,9 @@ export class MicrophoneCapture extends EventEmitter {
     public stop(): Promise<void> {
         // Idempotent: a concurrent stop() (e.g. endMeeting racing an audio
         // recovery teardown) joins the in-flight teardown instead of
-        // starting a second one. If we are not recording AND no teardown is
-        // in flight, this is a no-op resolved promise.
-        if (!this.isRecording) {
+        // starting a second one. A failed callback/start may clear isRecording
+        // while still owning a native handle, so that handle must be stopped too.
+        if (!this.isRecording && !this.monitor) {
             return this._teardownPromise ?? Promise.resolve();
         }
 

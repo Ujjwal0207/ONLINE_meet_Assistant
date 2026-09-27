@@ -16,6 +16,7 @@ export interface AppSettings {
     ambientChatEnabled?: boolean;
     actionButtonMode?: 'recap' | 'brainstorm';
     groqFastTextMode?: boolean;
+    antigravityConfig?: import('../../src/types/antigravity').AntigravityConfig;
     codexCliEnabled?: boolean;
     codexCliPath?: string;
     codexCliModel?: string;

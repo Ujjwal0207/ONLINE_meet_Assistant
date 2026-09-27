@@ -460,7 +460,7 @@ export class CropperWindowHelper {
 
         // Apply NSPanel stealth attributes (becomesKeyOnlyIfNeeded +
         // _setPreventsActivation: SPI + sharingType=None + collectionBehavior).
-        // Cropper opens during meetings via Cmd+Shift+H — without this, the
+        // Cropper opens during meetings via Cmd+Option+Shift+H — without this, the
         // cropperWindow.show()/.focus() calls below steal focus from the
         // foreground app (Zoom/browser), defeating the whole stealth model.
         //
@@ -491,7 +491,7 @@ export class CropperWindowHelper {
         console.log(`[CropperWindowHelper] Expected bounds: {x:${combinedBounds.x}, y:${combinedBounds.y}, width:${combinedBounds.width}, height:${combinedBounds.height}}`);
 
         if (process.platform === "darwin") {
-            this.cropperWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+            this.cropperWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
             this.cropperWindow.setAlwaysOnTop(true, "screen-saver")
         }
 

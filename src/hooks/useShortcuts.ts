@@ -38,6 +38,7 @@ export interface ShortcutConfig {
 function buildDefaultShortcuts(): ShortcutConfig {
     const mod = isMac ? '⌘' : 'Ctrl';
     const shift = isMac ? '⇧' : 'Shift';
+    const alt = isMac ? '⌥' : 'Alt';
     return {
         whatToAnswer: [mod, '1'],
         autoAnswerMode: [mod, 'f'],
@@ -64,8 +65,8 @@ function buildDefaultShortcuts(): ShortcutConfig {
         captureAndProcess: [mod, shift, 'Enter'],
         capturePage: [mod, shift, 'Y'],
         resetCancel: [mod, 'R'],
-        takeScreenshot: [mod, 'H'],
-        selectiveScreenshot: [mod, shift, 'H']
+        takeScreenshot: [mod, shift, 'H'],
+        selectiveScreenshot: [mod, alt, shift, 'H']
     };
 }
 

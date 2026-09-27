@@ -269,23 +269,24 @@ export const PermissionsToaster: React.FC<Props> = ({ isOpen, onDismiss }) => {
                   />
                 </motion.div>
 
-                {/* Open Settings button */}
+                {/* Action buttons */}
                 <motion.div
                   initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ ...SPRING.smooth, delay: 0.2 }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}
                 >
                   <motion.button
                     onClick={platform === 'darwin' ? openScreenSettings : handleDismiss}
                     whileHover={{ scale: 1.01 }}
                     whileTap={{ scale: 0.98 }}
                     style={{
-                      width: '100%', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                      width: '100%', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
                       padding: '0 20px', borderRadius: '11px', border: 'none', cursor: 'pointer',
                       background: 'linear-gradient(160deg, #5B8EF0 0%, #3B6FE8 50%, #2D5FD4 100%)',
                       boxShadow: isLight
                         ? '0 6px 18px rgba(37,99,235,0.25), inset 0 1px 0 rgba(255,255,255,0.2)'
                         : '0 8px 24px rgba(37,99,235,0.35), inset 0 1px 0 rgba(255,255,255,0.2)',
-                      fontFamily: T.font, fontSize: '14px', fontWeight: 600, color: '#fff',
+                      fontFamily: T.font, fontSize: '13.5px', fontWeight: 600, color: '#fff',
                       letterSpacing: '-0.01em',
                       position: 'relative',
                       overflow: 'hidden',
@@ -300,6 +301,23 @@ export const PermissionsToaster: React.FC<Props> = ({ isOpen, onDismiss }) => {
                     </span>
                   </motion.button>
 
+                  <motion.button
+                    onClick={handleDismiss}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.98 }}
+                    style={{
+                      width: '100%', height: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      padding: '0 16px', borderRadius: '10px',
+                      border: isLight ? '1px solid rgba(0,0,0,0.12)' : '1px solid rgba(255,255,255,0.15)',
+                      cursor: 'pointer',
+                      background: isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.06)',
+                      fontFamily: T.font, fontSize: '13px', fontWeight: 500,
+                      color: isLight ? '#1C1C1E' : '#FFFFFF',
+                      letterSpacing: '-0.01em',
+                    }}
+                  >
+                    Continue to Natively
+                  </motion.button>
                 </motion.div>
               </div>
 

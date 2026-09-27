@@ -173,10 +173,50 @@ export class CredentialsManager {
      * event. Respects the telemetry consent gate (the service no-ops when the
      * user disabled telemetry).
      */
+    /**
+     * Determine whether the OS keyring (Electron safeStorage / Chromium OSCrypt)
+     * is safe to invoke without triggering interactive OS password/ACL prompts.
+     */
+    public isKeyringSafe(): boolean {
+        if (process.env.NATIVELY_FORCE_FALLBACK_CRYPTO === '1' || process.env.NATIVELY_DISABLE_KEYCHAIN === '1') {
+            return false;
+        }
+        // In plain Node.js unit tests (where process.versions.electron is undefined),
+        // safeStorage is mocked by the test runner — allow tests to control behavior via the mock.
+        if (!process.versions.electron) {
+            return true;
+        }
+        if (process.platform === 'darwin') {
+            if (process.env.NATIVELY_ENABLE_MACOS_KEYCHAIN === '1') {
+                return true;
+            }
+            try {
+                if (!app.isPackaged) return false;
+                const pkgPath = path.join(app.getAppPath(), 'package.json');
+                if (fs.existsSync(pkgPath)) {
+                    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                    if (pkg?.nativelySigned === true) {
+                        return true;
+                    }
+                }
+            } catch {
+                return false;
+            }
+            return false;
+        }
+        return true;
+    }
+
     public emitStorageStatusDiagnostic(phase: 'startup' | 'stt_save_failed'): void {
         try {
             let available = false;
-            try { available = safeStorage.isEncryptionAvailable(); } catch { available = false; }
+            try {
+                if (this.isKeyringSafe()) {
+                    available = safeStorage.isEncryptionAvailable();
+                } else {
+                    available = false;
+                }
+            } catch { available = false; }
 
             const properties: Record<string, unknown> = {
                 phase,
@@ -398,7 +438,19 @@ export class CredentialsManager {
         // Codex CLI is local in normal install — capability is verified by ProviderRouter.
         const codexCliPath = (this.credentials as any).codexCliPath as string | undefined;
         if (codexCliPath && codexCliPath.trim().length > 0) return true;
-        return false;
+        try {
+            const g = global as any;
+            if (typeof g.__nativelyGetLLMHelper === 'function') {
+                const helper = g.__nativelyGetLLMHelper();
+                if (helper && typeof helper.getOllamaVisionModel === 'function' && helper.getOllamaVisionModel()) {
+                    return true;
+                }
+            }
+        } catch {
+            // ignore
+        }
+        // Local Ollama default port is available for local-first zero-cost setups
+        return true;
     }
 
     // =========================================================================
@@ -815,6 +867,13 @@ export class CredentialsManager {
      * to warn the user; with the fallback in place that warning is now rare.
      */
     public isPersistenceAvailable(): boolean {
+        if (!this.isKeyringSafe()) {
+            try {
+                return !!this.getFallbackKey();
+            } catch {
+                return false;
+            }
+        }
         try {
             if (safeStorage.isEncryptionAvailable()) return true;
         } catch {
@@ -882,7 +941,7 @@ export class CredentialsManager {
      *   - `app.getPath('userData')` — moves when the disguise feature calls
      *     `app.setName()`.
      */
-    private getFallbackKey(): Buffer {
+    public getFallbackKey(): Buffer {
         if (this.fallbackKey) return this.fallbackKey;
         const salt = this.getOrCreateDeviceSalt();
         const materialParts = [
@@ -908,7 +967,7 @@ export class CredentialsManager {
         // fallback instead of returning false, otherwise keys are silently lost
         // on restart (the bug reported for Deepgram and other STT keys).
         try {
-            if (safeStorage.isEncryptionAvailable()) {
+            if (this.isKeyringSafe() && safeStorage.isEncryptionAvailable()) {
                 const data = JSON.stringify(this.credentials);
                 const encrypted = safeStorage.encryptString(data);
                 const tmpEnc = CREDENTIALS_PATH + '.tmp';
@@ -1015,7 +1074,9 @@ export class CredentialsManager {
             //    single re-entry of the affected credential.
             if (fs.existsSync(CREDENTIALS_PATH)) {
                 let keyringAvailable = false;
-                try { keyringAvailable = safeStorage.isEncryptionAvailable(); } catch { keyringAvailable = false; }
+                if (this.isKeyringSafe()) {
+                    try { keyringAvailable = safeStorage.isEncryptionAvailable(); } catch { keyringAvailable = false; }
+                }
 
                 if (keyringAvailable && fs.existsSync(FALLBACK_PATH)) {
                     try {
@@ -1095,7 +1156,9 @@ export class CredentialsManager {
                 // Migrate up: if the keyring is now available, re-persist via safeStorage
                 // (saveCredentials prefers the keyring and deletes the fallback).
                 let keyringNow = false;
-                try { keyringNow = safeStorage.isEncryptionAvailable(); } catch { keyringNow = false; }
+                if (this.isKeyringSafe()) {
+                    try { keyringNow = safeStorage.isEncryptionAvailable(); } catch { keyringNow = false; }
+                }
                 if (keyringNow && Object.keys(this.credentials).length > 0) {
                     console.log('[CredentialsManager] Keyring now available — migrating fallback credentials to keyring');
                     this.saveCredentials();

@@ -609,7 +609,7 @@ const App: React.FC = () => {
         maybeCheck()
           .then((p) => {
             const blocked = (s?: string) => s === 'denied' || s === 'restricted';
-            const macTCCBlocked = p?.platform === 'darwin' && (blocked(p.microphone) || blocked(p.screen));
+            const macTCCBlocked = p?.platform === 'darwin' && !permsShown && (blocked(p.microphone) || blocked(p.screen));
             setOrchestratorUserState({
               permsShown,
               macTCCBlocked,

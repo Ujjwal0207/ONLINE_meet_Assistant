@@ -82,7 +82,7 @@ export class SystemAudioCapture extends EventEmitter {
         if (this.isRecording) return;
 
         if (!RustAudioCapture) {
-            console.error('[SystemAudioCapture] Cannot start: Rust module missing');
+            this.emit('error', new Error('System audio capture is unavailable because the native audio module could not be loaded. Rebuild or reinstall Natively, then try again.'));
             return;
         }
 
@@ -219,7 +219,7 @@ export class SystemAudioCapture extends EventEmitter {
      */
     public stop(): Promise<void> {
         // Idempotent — see MicrophoneCapture.stop().
-        if (!this.isRecording) {
+        if (!this.isRecording && !this.monitor) {
             return this._teardownPromise ?? Promise.resolve();
         }
 

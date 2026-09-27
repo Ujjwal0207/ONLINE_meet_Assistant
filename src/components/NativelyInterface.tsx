@@ -2,10 +2,12 @@ import { animate, AnimatePresence, motion, useMotionValue, useTransform } from '
 import {
   ArrowRight,
   ArrowDown,
+  Camera,
   ChevronDown,
   Code,
   Copy,
   Check,
+  Crop,
   Globe,
   HelpCircle,
   Image,
@@ -19,6 +21,9 @@ import {
   SlidersHorizontal,
   X,
   Zap,
+  FileText,
+  Upload,
+  Trash2,
 } from 'lucide-react';
 import {
   mergeRollingTranscriptFinal,
@@ -418,13 +423,19 @@ interface NativelyInterfaceProps {
 
 const buildConversationContextFromMessages = (items: Message[]): string =>
   items
-    .filter((m) => !(m.role === 'user' && (m.hasScreenshot || m.isQuickActionLabel)))
-    .map(
-      (m) =>
-        `${m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`,
-    )
+    .filter((m) => {
+      if (m.isQuickActionLabel) return false;
+      const text = (m.text || '').trim();
+      if (!text) return false;
+      return m.role === 'user' || m.role === 'system' || m.role === 'interviewer';
+    })
+    .map((m) => {
+      const roleLabel = m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant';
+      const prefix = m.hasScreenshot && m.role === 'user' ? '[Screenshot query] ' : '';
+      return `${roleLabel}: ${prefix}${m.text.trim()}`;
+    })
     .slice(-20)
-    .join('\n');
+    .join('\n\n');
 
 // PERF: HighlightedCode renders a single fenced code block. Hoisted to module
 // scope and wrapped in React.memo so a parent re-render does not re-tokenize
@@ -990,6 +1001,31 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [conversationContext, setConversationContext] = useState<string>('');
+  const [showReferenceModal, setShowReferenceModal] = useState(false);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [referenceText, setReferenceText] = useState(() => {
+    try {
+      return localStorage.getItem('natively_reference_context_text') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [referenceTextActive, setReferenceTextActive] = useState(() => {
+    try {
+      return localStorage.getItem('natively_reference_context_active') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('natively_reference_context_text', referenceText);
+      localStorage.setItem('natively_reference_context_active', String(referenceTextActive));
+    } catch (e) {
+      console.warn('Failed to save reference text to localStorage:', e);
+    }
+  }, [referenceText, referenceTextActive]);
   const [isManualRecording, setIsManualRecording] = useState(false);
   const isRecordingRef = useRef(false); // Ref to track recording state (avoids stale closure)
   const [manualTranscript, setManualTranscript] = useState('');
@@ -5866,12 +5902,14 @@ Provide only the answer, nothing else.`;
         }
       }
 
-      // Pass imagePath if attached, AND conversation context
+      // Pass imagePath if attached, conversation context, and reference text
       requestStartTimeRef.current = Date.now();
+      const refToSend = referenceTextActive && referenceText.trim() ? referenceText.trim() : undefined;
       await window.electronAPI.streamGeminiChat(
-        userText || 'Analyze this screenshot',
+        userText || (refToSend ? 'Analyze the reference material and answer' : 'Analyze this screenshot'),
         currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
-        conversationContextForSubmit, // Pass freshly-derived context so "answer this" works
+        conversationContextForSubmit, // Pass freshly-derived context so follow-ups work
+        { referenceText: refToSend },
       );
     } catch (err) {
       setIsProcessing(false);
@@ -8282,6 +8320,36 @@ Provide only the answer, nothing else.`;
                   </div>
                 )}
 
+                {/* Reference Text Active Pill */}
+                {referenceTextActive && referenceText.trim() && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-1 mb-2 text-xs rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-300">
+                    <div className="flex items-center gap-1.5 truncate min-w-0">
+                      <FileText className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                      <span className="font-semibold text-blue-200">
+                        {t('Reference Material Active:')}
+                      </span>
+                      <span className="opacity-90 font-mono text-[11px]">
+                        {(new Blob([referenceText]).size / 1024).toFixed(1)} KB
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => setShowReferenceModal(true)}
+                        className="text-[11px] font-medium text-blue-400 hover:text-blue-200 underline transition-colors"
+                      >
+                        {t('Edit')}
+                      </button>
+                      <button
+                        onClick={() => setReferenceTextActive(false)}
+                        className="text-slate-400 hover:text-white transition-colors text-sm leading-none px-1"
+                        title={t('Disable Reference')}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* data-stealth-engage marks this subtree as
                                     the ONLY clickable region that engages the
                                     CGEventTap. See the click-to-activate
@@ -8290,7 +8358,40 @@ Provide only the answer, nothing else.`;
                                     overlay no longer accidentally engage the
                                     tap and break inputs in Settings/Model
                                     Selector windows. */}
-                <div className="relative group" data-stealth-engage="true">
+                <div
+                  className={`relative group ${isDraggingFile ? "ring-2 ring-blue-500 bg-blue-500/10 rounded-xl" : ""}`}
+                  data-stealth-engage="true"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsDraggingFile(true);
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsDraggingFile(false);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsDraggingFile(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (!file) return;
+                    if (file.size > 10 * 1024 * 1024) {
+                      alert(t("File exceeds 10MB limit."));
+                      return;
+                    }
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                      const res = event.target?.result;
+                      if (typeof res === "string") {
+                        setReferenceText(res);
+                        setReferenceTextActive(true);
+                      }
+                    };
+                    reader.readAsText(file);
+                  }}
+                >
                   <input
                     ref={textInputRef}
                     data-testid="overlay-chat-input"
@@ -8495,21 +8596,65 @@ Provide only the answer, nothing else.`;
                         <PointerOff className="w-3.5 h-3.5" />
                       </button>
                     </div>
+
+                    <div className="w-px h-3 mx-1" style={appearance.dividerStyle} />
+
+                    {/* Full Screenshot Button */}
+                    <div className="relative">
+                      <button
+                        onClick={() => generalHandlersRef.current.takeScreenshot()}
+                        title={t('Take Full Screenshot')}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg interaction-base interaction-press overlay-icon-surface overlay-icon-surface-hover overlay-text-interactive"
+                        style={appearance.iconStyle}
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Selective Screenshot Button */}
+                    <div className="relative">
+                      <button
+                        onClick={() => generalHandlersRef.current.selectiveScreenshot()}
+                        title={t('Take Area Screenshot')}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg interaction-base interaction-press overlay-icon-surface overlay-icon-surface-hover overlay-text-interactive"
+                        style={appearance.iconStyle}
+                      >
+                        <Crop className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Reference Material / Huge Text Button (Up to 10MB) */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowReferenceModal((prev) => !prev)}
+                        title={t('Reference Knowledge / Huge Text (up to 10MB)')}
+                        className={`w-7 h-7 flex items-center justify-center rounded-lg interaction-base interaction-press ${
+                          referenceTextActive && referenceText.trim()
+                            ? 'bg-blue-500/25 text-blue-400 border border-blue-500/40 shadow-[0_0_10px_rgba(59,130,246,0.3)]'
+                            : showReferenceModal
+                            ? 'overlay-icon-surface overlay-icon-surface-hover text-accent-primary opacity-100'
+                            : 'overlay-icon-surface overlay-icon-surface-hover overlay-text-interactive'
+                        }`}
+                        style={appearance.iconStyle}
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   <button
                     onClick={handleManualSubmit}
-                    disabled={!inputValue.trim()}
+                    disabled={!inputValue.trim() && attachedContext.length === 0}
                     className={`
                                     w-7 h-7 rounded-full flex items-center justify-center
                                     interaction-base interaction-press
                                     ${
-                                      inputValue.trim()
+                                      inputValue.trim() || attachedContext.length > 0
                                         ? 'bg-[#007AFF] text-white shadow-lg shadow-blue-500/20 hover:bg-[#0071E3]'
                                         : 'overlay-icon-surface overlay-text-muted cursor-not-allowed'
                                     }
                                 `}
-                    style={inputValue.trim() ? undefined : appearance.iconStyle}
+                    style={inputValue.trim() || attachedContext.length > 0 ? undefined : appearance.iconStyle}
                   >
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
@@ -8519,6 +8664,139 @@ Provide only the answer, nothing else.`;
           </motion.div>
       {/* end always-mounted shell */}
     </div>
+
+      {/* Large Reference Text Modal (Up to 10MB) */}
+      {showReferenceModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+          <div
+            className="w-full max-w-2xl bg-neutral-900/95 border border-white/10 rounded-2xl shadow-2xl p-5 flex flex-col gap-4 text-white"
+            style={{ maxHeight: '85vh' }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-blue-500/20 text-blue-400">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-white">
+                    {t('Reference Knowledge / Huge Text')}
+                  </h3>
+                  <p className="text-[11px] text-neutral-400">
+                    {t('Ground Antigravity & Natively queries in up to 10MB of text without screenshots')}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <span className="text-xs text-neutral-300 font-medium">{t('Active')}</span>
+                  <input
+                    type="checkbox"
+                    checked={referenceTextActive}
+                    onChange={(e) => setReferenceTextActive(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 relative"></div>
+                </label>
+                <button
+                  onClick={() => setShowReferenceModal(false)}
+                  className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-white/10 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Toolbar: Upload File, Clear, Size Indicator */}
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-neutral-200 cursor-pointer transition-colors font-medium">
+                  <Upload className="w-3.5 h-3.5 text-blue-400" />
+                  <span>{t('Upload File')}</span>
+                  <input
+                    type="file"
+                    accept=".txt,.md,.markdown,.json,.csv,.tsv,.log,.xml,.html,.js,.ts,.py,.java,.cpp,.c,.h,.rs,.go"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      if (file.size > 10 * 1024 * 1024) {
+                        alert(t('File exceeds 10MB limit.'));
+                        return;
+                      }
+                      const reader = new FileReader();
+                      reader.onload = (event) => {
+                        const result = event.target?.result as string;
+                        if (typeof result === 'string') {
+                          setReferenceText(result);
+                          setReferenceTextActive(true);
+                        }
+                      };
+                      reader.readAsText(file);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+                {referenceText && (
+                  <button
+                    onClick={() => {
+                      if (confirm(t('Clear reference text?'))) {
+                        setReferenceText('');
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 transition-colors font-medium"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{t('Clear')}</span>
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 font-mono text-[11px] text-neutral-400">
+                <span>{(new Blob([referenceText]).size / (1024 * 1024)).toFixed(2)} MB / 10 MB</span>
+              </div>
+            </div>
+
+            {/* Textarea */}
+            <div className="relative flex-1 min-h-[260px] flex flex-col">
+              <textarea
+                value={referenceText}
+                onChange={(e) => {
+                  const text = e.target.value;
+                  if (new Blob([text]).size > 10 * 1024 * 1024) {
+                    alert(t('Maximum supported size is 10 MB.'));
+                    return;
+                  }
+                  setReferenceText(text);
+                  if (text.trim() && !referenceTextActive) {
+                    setReferenceTextActive(true);
+                  }
+                }}
+                placeholder={t('Paste large reference text, documentation, logs, codebase specs, or problem descriptions here (up to 10MB). When enabled, your queries will be answered according to this material without needing any screenshot...')}
+                className="w-full flex-1 min-h-[260px] p-3 text-xs font-mono leading-relaxed bg-black/40 border border-white/10 rounded-xl text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-blue-500/50 resize-y"
+                style={{ maxHeight: '55vh' }}
+              />
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between pt-2 border-t border-white/10 text-xs">
+              <span className="text-[11px] text-neutral-400">
+                {referenceTextActive
+                  ? t('✓ Active: will be sent with your questions')
+                  : t('○ Inactive: enable switch above to use')}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowReferenceModal(false)}
+                  className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors shadow-lg shadow-blue-600/20"
+                >
+                  {t('Done')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </>
   );
 };

@@ -140,10 +140,10 @@ describe('Screenshot capture focus safety — production source anchors', () => 
   // NO window/focus operations, so it cannot itself steal or drop focus — it
   // simply unwinds into the session finally above.
   test('the crop-failure throw lives in captureWithDesktopCapturer and touches no window/focus APIs', () => {
-    const throwIdx = screenshotSrc.indexOf('Region capture failed');
+    const fnIdx = screenshotSrc.indexOf('private async captureWithDesktopCapturer');
+    assert.ok(fnIdx !== -1, 'captureWithDesktopCapturer must exist');
+    const throwIdx = screenshotSrc.indexOf('Region capture failed', fnIdx);
     assert.ok(throwIdx !== -1, 'the fail-loud crop throw must exist');
-
-    const fnIdx = screenshotSrc.lastIndexOf('private async captureWithDesktopCapturer', throwIdx);
     assert.ok(fnIdx !== -1 && fnIdx < throwIdx,
       'the throw must be inside captureWithDesktopCapturer');
 

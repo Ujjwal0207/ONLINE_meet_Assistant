@@ -411,6 +411,12 @@ export class IntelligenceEngine extends EventEmitter {
         return this.llmHelper;
     }
 
+    private providerFirstUsefulDeadline(fallbackMs: number): number {
+        return this.llmHelper.isUsingAntigravity?.()
+            ? this.llmHelper.getAntigravityConfig().timeoutMs
+            : fallbackMs;
+    }
+
     getRecapLLM(): RecapLLM | null {
         return this.recapLLM;
     }
@@ -797,6 +803,7 @@ export class IntelligenceEngine extends EventEmitter {
         const isSpeculative = options?.speculative === true;
         const skipCooldown = options?.skipCooldown === true;
         const forceFresh = options?.forceFresh === true;
+        const usingAntigravity = this.llmHelper.isUsingAntigravity?.() === true;
 
         // Manual user action (button press / hotkey) MUST start from a clean
         // speculativeText slate. The previous answer arriving on a manual press
@@ -2401,9 +2408,9 @@ export class IntelligenceEngine extends EventEmitter {
             const usingLocalLlm = typeof (this.llmHelper as any).isUsingOllama === 'function'
                 ? (this.llmHelper as any).isUsingOllama()
                 : false;
-            const firstUsefulDeadline = usingLocalLlm
+            const firstUsefulDeadline = this.providerFirstUsefulDeadline(usingLocalLlm
                 ? LIVE_LOCAL_TOTAL_HARD_TIMEOUT_MS
-                : LIVE_TOTAL_HARD_TIMEOUT_MS;
+                : LIVE_TOTAL_HARD_TIMEOUT_MS);
             let liveDeadlineFired = false;
 
             const emitChunk = (chunk: string) => {
@@ -2474,6 +2481,12 @@ export class IntelligenceEngine extends EventEmitter {
             // its own supersession predicate, so either case is safe to suppress.
             if (raceOutcome === 'aborted' || isWtaSuperseded()) {
                 streamAborted = true;
+            }
+            if (usingAntigravity && !streamAborted
+                && (raceOutcome === 'first_useful_timeout' || raceOutcome === 'stall_timeout')) {
+                throw new Error(raceOutcome === 'stall_timeout'
+                    ? 'Antigravity stopped responding. Please try again.'
+                    : 'Antigravity did not answer before the request timed out. Try again or increase the timeout in Settings → AI Providers.');
             }
             if (streamAborted) {
                 console.log('[IntelligenceEngine] _what_to_say stream aborted by new generation');
@@ -2851,13 +2864,16 @@ export class IntelligenceEngine extends EventEmitter {
                                 [],
                                 whatToAnswerCancellationToken.signal,
                             ) as AsyncGenerator<string>,
-                            firstUsefulDeadlineMs: this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
+                            firstUsefulDeadlineMs: this.providerFirstUsefulDeadline(this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000),
                             interTokenStallMs: LIVE_INTER_TOKEN_STALL_MS,
                             isUsefulYet: () => scaffoldRepaired.length >= 5,
                             shouldAbort: () => scaffoldRepaired.length > 1800
                                 || whatToAnswerCancellationToken.signal.aborted
                                 || isWtaSuperseded(),
                             onToken: (tok: string) => { scaffoldRepaired += tok; },
+                            onCleanup: (reason) => {
+                                if (usingAntigravity && reason !== 'done') whatToAnswerCancellationToken.abort(reason);
+                            },
                         });
                     } catch { /* keep original fullAnswer on repair failure */ }
                     const scaffoldRepairedTrim = scaffoldRepaired.trim();
@@ -3013,13 +3029,16 @@ export class IntelligenceEngine extends EventEmitter {
                                             ['reference_files'],
                                             whatToAnswerCancellationToken.signal,
                                         ) as AsyncGenerator<string>,
-                                        firstUsefulDeadlineMs: this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
+                                        firstUsefulDeadlineMs: this.providerFirstUsefulDeadline(this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000),
                                         interTokenStallMs: LIVE_INTER_TOKEN_STALL_MS,
                                         isUsefulYet: () => repaired.trim().length >= 5,
                                         shouldAbort: () => repaired.length > 1800
                                             || whatToAnswerCancellationToken.signal.aborted
                                             || isWtaSuperseded(),
                                         onToken: (tok: string) => { repaired += tok; },
+                                        onCleanup: (reason) => {
+                                            if (usingAntigravity && reason !== 'done') whatToAnswerCancellationToken.abort(reason);
+                                        },
                                     });
                                 } catch { /* keep partial repaired */ }
                                 const repairedTrim = cleanAnswerArtifacts(repaired.trim());
@@ -3206,12 +3225,15 @@ export class IntelligenceEngine extends EventEmitter {
                                     [],
                                     whatToAnswerCancellationToken.signal,
                                 ) as AsyncGenerator<string>,
-                                firstUsefulDeadlineMs: this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
+                                firstUsefulDeadlineMs: this.providerFirstUsefulDeadline(this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000),
                                 isUsefulYet: () => repaired.length >= 5,
                                 shouldAbort: () => repaired.length > 1200
                                     || whatToAnswerCancellationToken.signal.aborted
                                     || isWtaSuperseded(),
                                 onToken: (tok: string) => { repaired += tok; },
+                                onCleanup: (reason) => {
+                                    if (usingAntigravity && reason !== 'done') whatToAnswerCancellationToken.abort(reason);
+                                },
                             });
                         } catch { /* keep partial repaired */ }
                         const repairedTrim = repaired.trim();
@@ -3556,12 +3578,15 @@ export class IntelligenceEngine extends EventEmitter {
                                     [],
                                     whatToAnswerCancellationToken.signal,
                                 ) as AsyncGenerator<string>,
-                                firstUsefulDeadlineMs: this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
+                                firstUsefulDeadlineMs: this.providerFirstUsefulDeadline(this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000),
                                 isUsefulYet: () => repaired.length >= 5,
                                 shouldAbort: () => repaired.length > 1200
                                     || whatToAnswerCancellationToken.signal.aborted
                                     || isWtaSuperseded(),
                                 onToken: (tok: string) => { repaired += tok; },
+                                onCleanup: (reason) => {
+                                    if (usingAntigravity && reason !== 'done') whatToAnswerCancellationToken.abort(reason);
+                                },
                             });
                         } catch { /* keep original fullAnswer on repair failure */ }
                         const repairedTrim = repaired.trim();
@@ -3847,7 +3872,7 @@ export class IntelligenceEngine extends EventEmitter {
             if (openedStreamRow) this.emit('suggested_answer_discard', 'error');
             this.emit('error', error as Error, 'what_to_say');
             this.setMode('idle');
-            return buildGracefulRetry(question);
+            return usingAntigravity ? null : buildGracefulRetry(question);
         } finally {
             // Only the request that still owns the slot may clear it. An older
             // cancelled request must not sever the newer request's controller.
@@ -3896,6 +3921,10 @@ export class IntelligenceEngine extends EventEmitter {
                     // background task / leaked request (Issue 1 consistency). 7s (was
                     // 6s) clears MiniMax's 4-6s first-token when it's the fallback.
                     let fixed = '';
+                    const correctionController = new AbortController();
+                    const correctionSignal = abortSignal
+                        ? AbortSignal.any([abortSignal, correctionController.signal])
+                        : correctionController.signal;
                     await raceStreamWithDeadline({
                         stream: this.llmHelper.streamChat(
                             repairPrompt,
@@ -3905,12 +3934,15 @@ export class IntelligenceEngine extends EventEmitter {
                             true,
                             true,
                             [],
-                            abortSignal,
+                            correctionSignal,
                         ) as AsyncGenerator<string>,
-                        firstUsefulDeadlineMs: this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
+                        firstUsefulDeadlineMs: this.providerFirstUsefulDeadline(this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000),
                         isUsefulYet: () => fixed.length >= 5,
                         shouldAbort: () => fixed.length > 1200 || superseded(),
                         onToken: (tok: string) => { fixed += tok; },
+                        onCleanup: (reason) => {
+                            if (reason !== 'done') correctionController.abort(reason);
+                        },
                     });
                     return fixed;
                 },

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Check, Loader2 } from 'lucide-react';
-import { CODEX_CLI_MODEL, CODEX_CLI_MODEL_PRESETS, codexCliSelectorId, getCodexCliModelDisplayName, STANDARD_CLOUD_MODELS, prettifyModelId } from '../utils/modelUtils';
+import { ANTIGRAVITY_MODEL, getAntigravityModelDisplayName, CODEX_CLI_MODEL, CODEX_CLI_MODEL_PRESETS, codexCliSelectorId, getCodexCliModelDisplayName, STANDARD_CLOUD_MODELS, prettifyModelId } from '../utils/modelUtils';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { getMeetingInterfaceTheme, type MeetingInterfaceTheme } from '../lib/meetingInterfaceTheme';
 import {
@@ -15,7 +15,7 @@ import {
 interface ModelOption {
     id: string;
     name: string;
-    type: 'cloud' | 'local' | 'custom' | 'ollama' | 'codex-cli';
+    type: 'cloud' | 'local' | 'custom' | 'ollama' | 'codex-cli' | 'antigravity';
     provider?: string;
 }
 
@@ -112,6 +112,7 @@ const ModelSelectorWindow = () => {
 
                 // 3. Codex CLI
                 const codexCliConfig = await window.electronAPI?.getCodexCliConfig?.();
+                const antigravityConfig = await window.electronAPI?.getAntigravityConfig?.();
 
                 // 4. Ollama
                 let ollamaModels: string[] = [];
@@ -180,10 +181,22 @@ const ModelSelectorWindow = () => {
                     });
                 }
 
-                // Ollama
-                ollamaModels.forEach((m: string) => {
-                    models.push({ id: `ollama-${m}`, name: `${m} (Local)`, type: 'ollama' });
-                });
+                // Antigravity uses the account and model configured in Settings.
+                if (antigravityConfig?.enabled) {
+                    models.push({ id: ANTIGRAVITY_MODEL.id, name: getAntigravityModelDisplayName(antigravityConfig.model), type: 'antigravity', provider: 'antigravity' });
+                }
+
+                // Ollama (exclude embedding-only models, label vision-capable models)
+                ollamaModels
+                    .filter((m: string) => !/embed|bge-|minilm|arctic/i.test(m))
+                    .forEach((m: string) => {
+                        const isVision = /gemma3|vision|vl|llava/i.test(m);
+                        models.push({
+                            id: `ollama-${m}`,
+                            name: isVision ? `${m} (Local + Vision)` : `${m} (Local)`,
+                            type: 'ollama',
+                        });
+                    });
 
                 // LiteLLM proxy — auto-discovered from the configured proxy's /v1/models.
                 // Wrapped in try/catch so a missing/offline proxy never blocks the list.
@@ -224,9 +237,11 @@ const ModelSelectorWindow = () => {
         const unsubscribe = window.electronAPI?.onModelChanged?.((modelId: string) => {
             setCurrentModel(modelId);
         });
+        const unsubscribeCredentials = window.electronAPI?.onCredentialsChanged?.(() => void loadModels());
         return () => {
             cancelled = true;
             unsubscribe?.();
+            unsubscribeCredentials?.();
         };
     }, []);
 

@@ -909,6 +909,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
     const [selectedInput, setSelectedInput] = useState('');
     const [selectedOutput, setSelectedOutput] = useState('');
     const [micLevel, setMicLevel] = useState(0);
+    const [audioTestError, setAudioTestError] = useState<string | null>(null);
+    const [systemAudioLevel, setSystemAudioLevel] = useState(0);
+    const [systemAudioTestError, setSystemAudioTestError] = useState<string | null>(null);
     const [useExperimentalSck, setUseExperimentalSck] = useState(false);
     // Most-recent device fallback notice. Populated by main process via
     // 'device-selection-applied' IPC when the saved device couldn't be opened
@@ -1322,7 +1325,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                 window.electronAPI.getThemeMode().then(({ mode }) => setThemeMode(mode));
             }
 
-            // Load settings
+            // Refresh native IDs when hardware is connected or Settings regains focus.
+            let cancelled = false;
             const loadDevices = async () => {
                 try {
                     const [inputs, outputs] = await Promise.all([
@@ -1333,37 +1337,33 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                     ]);
 
                     // Map to shape compatible with CustomSelect (which expects MediaDeviceInfo-like objects)
-                    const formatDevices = (devs: any[]) => devs.map(d => ({
+                    if (cancelled) return;
+                    const formatDevices = (devs: any[], kind: MediaDeviceKind) => devs.map(d => ({
                         deviceId: d.id,
                         label: d.name,
-                        kind: 'audioinput' as MediaDeviceKind,
+                        kind,
                         groupId: '',
                         toJSON: () => d
                     }));
 
-                    setInputDevices(formatDevices(inputs));
-                    setOutputDevices(formatDevices(outputs));
+                    setInputDevices(formatDevices(inputs, 'audioinput'));
+                    setOutputDevices(formatDevices(outputs, 'audiooutput'));
 
                     // Load saved preferences
                     const savedInput = localStorage.getItem('preferredInputDeviceId');
                     const savedOutput = localStorage.getItem('preferredOutputDeviceId');
 
-                    if (savedInput && inputs.find((d: any) => d.id === savedInput)) {
-                        setSelectedInput(savedInput);
-                    } else if (inputs.length > 0 && !selectedInput) {
-                        setSelectedInput(inputs[0].id);
-                    }
-
-                    if (savedOutput && outputs.find((d: any) => d.id === savedOutput)) {
-                        setSelectedOutput(savedOutput);
-                    } else if (outputs.length > 0 && !selectedOutput) {
-                        setSelectedOutput(outputs[0].id);
-                    }
+                    setSelectedInput(savedInput && inputs.some((d: any) => d.id === savedInput)
+                        ? savedInput : (inputs.find((d: any) => d.id === 'default')?.id ?? inputs[0]?.id ?? ''));
+                    setSelectedOutput(savedOutput && outputs.some((d: any) => d.id === savedOutput)
+                        ? savedOutput : (outputs.find((d: any) => d.id === 'default')?.id ?? outputs[0]?.id ?? ''));
                 } catch (e) {
                     console.error("Error loading native devices:", e);
                 }
             };
             loadDevices();
+            window.addEventListener('focus', loadDevices);
+            navigator.mediaDevices?.addEventListener('devicechange', loadDevices);
 
             // Load Experimental SCK pref
             const savedSck = localStorage.getItem('useExperimentalSckBackend') === 'true';
@@ -1373,8 +1373,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
             if (window.electronAPI?.getCalendarStatus) {
                 window.electronAPI.getCalendarStatus().then(setCalendarStatus);
             }
+            return () => {
+                cancelled = true;
+                window.removeEventListener('focus', loadDevices);
+                navigator.mediaDevices?.removeEventListener('devicechange', loadDevices);
+            };
         }
-    }, [isOpen, selectedInput, selectedOutput]); // Re-run if isOpen changes, or if selected devices are cleared
+    }, [isOpen]);
 
     // Fetch upcoming calendar events while the Calendar tab is open and connected.
     // Polls every 60s to mirror the Launcher's cadence.
@@ -1433,21 +1438,40 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
         const shouldRun = isOpen && activeTab === 'audio' && !!selectedInput;
 
         if (shouldRun) {
+            let cancelled = false;
+            setAudioTestError(null);
+            setSystemAudioTestError(null);
+            setMicLevel(0);
+            setSystemAudioLevel(0);
             const unsubscribe = window.electronAPI?.onAudioTestLevel?.((level) => {
                 setMicLevel(Math.max(0, Math.min(100, level * 100)));
             });
+            const unsubscribeSystemLevel = window.electronAPI?.onAudioTestSystemLevel?.((level) => {
+                setSystemAudioLevel(Math.max(0, Math.min(100, level * 100)));
+            });
+            const unsubscribeSystemError = window.electronAPI?.onAudioTestSystemError?.((message) => {
+                setSystemAudioTestError(message);
+                setSystemAudioLevel(0);
+            });
 
-            window.electronAPI?.startAudioTest(selectedInput).catch((error) => {
+            const outputDeviceId = isMac && useExperimentalSck ? 'sck' : selectedOutput;
+            window.electronAPI?.startAudioTest(selectedInput, outputDeviceId).catch((error) => {
+                if (cancelled) return;
                 console.error("Error starting native microphone test:", error);
                 setMicLevel(0);
+                setAudioTestError(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : String(error));
             });
 
             return () => {
+                cancelled = true;
                 unsubscribe?.();
+                unsubscribeSystemLevel?.();
+                unsubscribeSystemError?.();
                 window.electronAPI?.stopAudioTest?.().catch((error) => {
                     console.error("Error stopping native microphone test:", error);
                 });
                 setMicLevel(0);
+                setSystemAudioLevel(0);
             };
         }
 
@@ -1462,7 +1486,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
             console.error("Error stopping native microphone test (guard=false):", error);
         });
         setMicLevel(0);
-    }, [isOpen, activeTab, selectedInput]);
+        setSystemAudioLevel(0);
+    }, [isOpen, activeTab, selectedInput, selectedOutput, useExperimentalSck]);
 
     return (
         <AnimatePresence>
@@ -2851,6 +2876,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                         style={{ width: `${micLevel}%` }}
                                                     />
                                                 </div>
+                                                {audioTestError && (
+                                                    <p role="alert" className="mt-2 text-xs text-amber-400">{audioTestError}</p>
+                                                )}
                                             </div>
 
                                             <div className="h-px bg-border-subtle my-2" />
@@ -2866,6 +2894,17 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                 }}
                                                 placeholder={t("Default Speakers")}
                                             />
+
+                                            <div>
+                                                <p className="text-xs text-text-secondary mb-2 px-1">{t('System Audio Level')}</p>
+                                                <div className="h-1.5 bg-bg-input rounded-full overflow-hidden">
+                                                    <div className="h-full bg-blue-500 transition-all duration-100 ease-out" style={{ width: `${systemAudioLevel}%` }} />
+                                                </div>
+                                                <p className="mt-2 text-xs text-text-secondary">{t('Play audio in another app to check system capture. Device changes apply to your next meeting.')}</p>
+                                                {systemAudioTestError && (
+                                                    <p role="alert" className="mt-2 text-xs text-amber-400">{systemAudioTestError}</p>
+                                                )}
+                                            </div>
 
                                             <div className="flex justify-end">
                                                 <button

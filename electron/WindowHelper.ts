@@ -312,6 +312,7 @@ export class WindowHelper {
       resizable: true,
       movable: true,
       center: true,
+      alwaysOnTop: true,
       icon: (() => {
         const isMac = process.platform === 'darwin';
         const isWin = process.platform === 'win32';
@@ -380,6 +381,11 @@ export class WindowHelper {
     }
 
     this.launcherWindow.setContentProtection(this.contentProtection);
+
+    if (isMac) {
+      this.launcherWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+      this.launcherWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    }
 
     // A/B KILL-SWITCH (2026-07-10): NATIVELY_DISABLE_ONBOARDING_ORCH=1 appends
     // ?noorch=1, which makes App.tsx skip orch.start() entirely (no drain loop,
@@ -553,9 +559,9 @@ export class WindowHelper {
     }
 
     if (process.platform === 'darwin') {
-      this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
       this.overlayWindow.setHiddenInMissionControl(true);
-      this.overlayWindow.setAlwaysOnTop(true, 'floating');
+      this.overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1);
 
       // Apply Spotlight/Alfred-grade stealth attributes that Electron does not
       // expose: becomesKeyOnlyIfNeeded (clicks on buttons / surfaces don't
@@ -1171,8 +1177,12 @@ export class WindowHelper {
         // synchronously, so calling it before show() ensures the window lands at the
         // correct z-level on first paint. Calling it after focus() would leave a brief
         // window where the HWND is focused at the wrong z-level (issue #136).
-        // Skipped on macOS — calling setAlwaysOnTop triggers [NSApp activate] which
-        // steals focus from Zoom/browser even when showInactive() was used.
+        if (process.platform === 'darwin') {
+          this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+          if (!inactive) {
+            this.overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+          }
+        }
         if (process.platform === 'win32') {
           this.overlayWindow.setAlwaysOnTop(true, 'screen-saver');
         }
@@ -1224,6 +1234,10 @@ export class WindowHelper {
 
     // Show Launcher FIRST
     if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+      if (process.platform === 'darwin') {
+        this.launcherWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+        this.launcherWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+      }
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first
         this.launcherWindow.setOpacity(0);

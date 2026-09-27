@@ -60,6 +60,8 @@ import { promisify } from 'util';
 import axios from 'axios';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 import { CodexCliConfig, CodexCliService, DEFAULT_CODEX_CLI_CONFIG } from './services/CodexCliService';
+import { AntigravityService } from './services/AntigravityService';
+import type { AntigravityConfig } from '../src/types/antigravity';
 const execAsync = promisify(exec);
 const NATIVELY_API_URL = (process.env.NATIVELY_API_URL || 'https://api.natively.software').replace(/\/+$/, '');
 
@@ -317,6 +319,7 @@ export class LLMHelper {
   private activeCurlProvider: CurlProvider | null = null;
   private groqFastTextMode: boolean = false;
   private codexCliConfig: CodexCliConfig = DEFAULT_CODEX_CLI_CONFIG;
+  private antigravityConfig: AntigravityConfig = AntigravityService.normalizeConfig({});
   private knowledgeOrchestrator: any = null;
   private negotiationCoachingHandler: ((payload: unknown) => void) | null = null;
   private aiResponseLanguage: string = 'auto';
@@ -881,6 +884,28 @@ export class LLMHelper {
     return this.codexCliConfig;
   }
 
+  public setAntigravityConfig(config: Partial<AntigravityConfig>): void {
+    this.antigravityConfig = AntigravityService.normalizeConfig(config);
+  }
+
+  public getAntigravityConfig(): AntigravityConfig {
+    return { ...this.antigravityConfig };
+  }
+
+  public isUsingAntigravity(): boolean {
+    return !this.useOllama && !this.customProvider && !this.activeCurlProvider
+      && this.currentModelId === 'antigravity';
+  }
+
+  private async *streamWithAntigravity(
+    prompt: string, instructions?: string, imagePaths?: string[], signal?: AbortSignal, referenceText?: string,
+  ): AsyncGenerator<string, void, unknown> {
+    if (this.isLocalOnlyMode) throw new Error('Antigravity requires cloud access. Turn off Local Only mode to use it.');
+    if (!this.antigravityConfig.enabled) throw new Error('Enable Antigravity in Settings → AI Providers first.');
+    this.assertOutboundScopes('antigravity', prompt, imagePaths);
+    yield* AntigravityService.stream(this.antigravityConfig, { prompt, instructions, imagePaths, signal, referenceText });
+  }
+
   public getAiResponseLanguage(): string {
     return this.aiResponseLanguage;
   }
@@ -1193,6 +1218,10 @@ export class LLMHelper {
     return text;
   }
 
+  public getOllamaVisionModel(): string | null {
+    return this.ollamaVisionModel;
+  }
+
   private async callOllama(prompt: string, imagePath?: string | string[], systemPrompt?: string): Promise<string> {
     try {
       let images: string[] | undefined;
@@ -1210,13 +1239,34 @@ export class LLMHelper {
         if (encoded.length > 0) images = encoded;
       }
 
+      let activeModel = this.ollamaModel;
+      if (images && images.length > 0) {
+        const capabilities = getModelCapabilities(activeModel, true);
+        if (!capabilities.supportsImages) {
+          const visionModel = this.ollamaVisionModel || (await this.refreshOllamaVisionModel());
+          if (visionModel) {
+            activeModel = visionModel;
+            console.log(`[LLMHelper] callOllama auto-switched to vision model: ${activeModel}`);
+          }
+        }
+      }
+
       const sys = systemPrompt ? this.resolveLocalSystemPrompt(systemPrompt) : TINY_SYSTEM_PROMPT;
       // Per-request hard guard: trim userContent (never sys) until total fits the model's max ctx.
       let userContent = prompt;
-      const maxCtx = getModelCapabilities(this.ollamaModel, true).maxContextTokens;
+
+      // If active model is still text-only and images are present, omit images payload to avoid 400 crash
+      const activeCaps = getModelCapabilities(activeModel, true);
+      if (!activeCaps.supportsImages && images?.length) {
+        console.warn(`[LLMHelper] callOllama: active model ${activeModel} is text-only. Omitting images payload to prevent 400 rejection.`);
+        images = undefined;
+        userContent = `[Note: A screenshot was provided, but local model ${activeModel} is text-only. Please answer using available text context.]\n\n${userContent}`;
+      }
+
+      const maxCtx = activeCaps.maxContextTokens;
       let total = estimateTokens(sys) + estimateTokens(userContent) + 2000;
       if (total > maxCtx) {
-        console.warn('[Ollama] context overflow', { model: this.ollamaModel, total, max: maxCtx });
+        console.warn('[Ollama] context overflow', { model: activeModel, total, max: maxCtx });
         const lines = userContent.split('\n');
         while (lines.length > 1 && (estimateTokens(sys) + estimateTokens(lines.join('\n')) + 2000) > maxCtx) {
           lines.shift();
@@ -1230,10 +1280,10 @@ export class LLMHelper {
         userMessage,
       ];
 
-      console.log(`[LLMHelper] Ollama call → model=${this.ollamaModel} sysLen=${sys.length} userLen=${userContent.length} images=${images?.length ?? 0}`);
+      console.log(`[LLMHelper] Ollama call → model=${activeModel} sysLen=${sys.length} userLen=${userContent.length} images=${images?.length ?? 0}`);
 
       const ollamaBody: any = {
-        model: this.ollamaModel,
+        model: activeModel,
         messages,
         stream: false,
         // Keep the model resident between turns (see ollamaKeepAlive / streamWithOllama).
@@ -1243,7 +1293,7 @@ export class LLMHelper {
           top_p: 0.9,
         }
       };
-      if (this.isThinkingModel(this.ollamaModel)) ollamaBody.think = false;
+      if (this.isThinkingModel(activeModel)) ollamaBody.think = false;
       const response = await fetch(`${this.ollamaUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1273,11 +1323,17 @@ export class LLMHelper {
     try {
       const availableModels = await this.getOllamaModels();
       if (availableModels.length === 0) return false;
-      if (!this.ollamaModel || !availableModels.includes(this.ollamaModel)) {
-        this.ollamaModel = availableModels[0];
+      if (!this.ollamaModel || !availableModels.includes(this.ollamaModel) || /embed|bge-|minilm|arctic/i.test(this.ollamaModel)) {
+        const preferred = availableModels.find(m => /gemma|vision|vl|llava/i.test(m)) || availableModels.find(m => /llama|qwen|mistral/i.test(m)) || availableModels[0];
+        this.ollamaModel = preferred;
       }
-      const capabilities = getModelCapabilities(this.ollamaModel, true);
-      if (needsVision && !capabilities.supportsImages) return false;
+      if (needsVision) {
+        const capabilities = getModelCapabilities(this.ollamaModel, true);
+        if (capabilities.supportsImages) return true;
+        const visionModel = this.ollamaVisionModel || (await this.refreshOllamaVisionModel());
+        if (visionModel) return true;
+        return false;
+      }
       const response = await fetch(`${this.ollamaUrl}/api/show`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1302,8 +1358,9 @@ export class LLMHelper {
         return
       }
 
-      if (!this.ollamaModel || !availableModels.includes(this.ollamaModel)) {
-        this.ollamaModel = availableModels[0]
+      if (!this.ollamaModel || !availableModels.includes(this.ollamaModel) || /embed|bge-|minilm|arctic/i.test(this.ollamaModel)) {
+        const preferred = availableModels.find(m => /gemma|vision|vl|llava/i.test(m)) || availableModels.find(m => /llama|qwen|mistral/i.test(m)) || availableModels[0]
+        this.ollamaModel = preferred
         console.log(`[LLMHelper] Auto-selected Ollama model: ${this.ollamaModel}`)
       }
 
@@ -1799,6 +1856,11 @@ ANSWER DIRECTLY:`;
     const systemPrompt = this.injectLanguageInstruction(basePrompt);
 
     try {
+      if (this.isUsingAntigravity()) {
+        let answer = '';
+        for await (const chunk of this.streamChat(promptMessage, undefined, suggestionContext, basePrompt, true)) answer += chunk;
+        return this.processResponse(answer);
+      }
       if (this.isCodexAvailable()) {
         // Codex CLI takes priority when available — same precedence as in chat().
         try {
@@ -2379,6 +2441,12 @@ const isMultimodal = !!(imagePaths?.length);
       // System prompts for OpenAI/Claude/Codex CLI (skipped if skipSystemPrompt)
       const openaiSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(systemPromptOverride || OPENAI_SYSTEM_PROMPT);
       const claudeSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(systemPromptOverride || CLAUDE_SYSTEM_PROMPT);
+
+      if (this.isUsingAntigravity()) {
+        let answer = '';
+        for await (const chunk of this.streamWithAntigravity(cloudUserContent, openaiSystemPrompt, cloudImagePaths)) answer += chunk;
+        return answer;
+      }
 
       // GROQ FAST TEXT OVERRIDE (Text-Only) — gated on picked model so Gemini/Claude/OpenAI
       // selections aren't silently routed to Groq. See streamChat() for matching gate.
@@ -4292,16 +4360,16 @@ const isMultimodal = !!(imagePaths?.length);
           open: (sig) => this.streamWithCustom(message, context, imagePaths, systemPrompt, sig) });
       }
     }
-    // Ollama: use the resolved vision-capable model (which may differ from the
-    // primary text model). Synchronously trust the cached resolution; kick off
-    // a refresh for next time if we haven't probed yet.
-    const ollamaVisionModel = this.useOllama ? this.ollamaVisionModel : null;
-    if (this.useOllama && !ollamaVisionModel) {
-      this.refreshOllamaVisionModel().catch(() => { }); // populate for the next request
+    // Ollama: resolve vision-capable model (cached or eagerly probed).
+    // When cloud models have no keys or are exhausted, local Ollama (e.g. gemma3:4b)
+    // acts as an immediate reliable fallback so screenshots can always be processed.
+    let resolvedOllamaVision = this.ollamaVisionModel;
+    if (!resolvedOllamaVision) {
+      resolvedOllamaVision = await this.refreshOllamaVisionModel(true);
     }
-    if (ollamaVisionModel) {
-      local.push({ id: 'ollama', name: `Ollama (${ollamaVisionModel})`, isLocal: true, priority: 101,
-        open: (sig) => this.streamWithOllama(message, context, systemPrompt, imagePaths, sig, ollamaVisionModel) });
+    if (resolvedOllamaVision) {
+      local.push({ id: 'ollama', name: `Ollama (${resolvedOllamaVision})`, isLocal: true, priority: 101,
+        open: (sig) => this.streamWithOllama(message, context, systemPrompt, imagePaths, sig, resolvedOllamaVision) });
     }
 
     // ── Assemble the ordered chain ─────────────────────────────────────────
@@ -5030,6 +5098,13 @@ const isMultimodal = !!(imagePaths?.length);
     }
     const finalSystemPrompt = this.injectLanguageInstruction(baseSystemPrompt);
     let combinedContext = context;
+    if (routeOptions?.referenceText && routeOptions.referenceText.trim() && !this.isUsingAntigravity()) {
+      const refSnippet = routeOptions.referenceText.length > 200000
+        ? routeOptions.referenceText.slice(0, 200000) + "\n[...reference text truncated for non-Antigravity model]"
+        : routeOptions.referenceText;
+      const refBlock = `## REFERENCE MATERIAL PROVIDED BY USER:\n${refSnippet}`;
+      combinedContext = combinedContext ? `${refBlock}\n\n${combinedContext}` : refBlock;
+    }
 
     // Helper to build combined user message
     // Document-grounded custom mode (audit 2026-06-28, weak-model real-path
@@ -5413,6 +5488,14 @@ const isMultimodal = !!(imagePaths?.length);
     markH4Stage('provider_dispatch_start', { model: this.currentModelId });
     _stage(`provider dispatch START (sysPrompt=${finalSystemPrompt.length}c, userContent=${userContent.length}c, model=${this.currentModelId})`);
 
+    // An explicit Antigravity selection owns both text and screenshot requests.
+    // Keep it ahead of fast-mode and the cloud vision fallback so neither can
+    // silently send this turn to a different provider. Scope filtering is above.
+    if (this.isUsingAntigravity()) {
+      yield* this.streamWithAntigravity(userContent, finalSystemPrompt, imagePaths, abortSignal, routeOptions?.referenceText);
+      return;
+    }
+
     // ── UNIFIED MULTIMODAL PATH ────────────────────────────────────────────
     // Every image-bearing request goes through the single streaming vision
     // fallback chain (OpenAI → Claude → Gemini → Groq → Natively → local) with
@@ -5498,7 +5581,24 @@ const isMultimodal = !!(imagePaths?.length);
     // 1. Ollama Streaming
     if (this.useOllama) {
       const ollamaSystemPrompt = this.resolveLocalSystemPrompt(finalSystemPrompt);
-      yield* this.streamWithOllama(contextOsGoverningBlock ? userContent : message, contextOsGoverningBlock ? undefined : combinedContext || undefined, ollamaSystemPrompt, imagePaths, abortSignal);
+      let targetVisionModel: string | undefined = undefined;
+      if (isMultimodal) {
+        const capabilities = getModelCapabilities(this.ollamaModel, true);
+        if (!capabilities.supportsImages) {
+          targetVisionModel = this.ollamaVisionModel || (await this.refreshOllamaVisionModel()) || undefined;
+          if (targetVisionModel) {
+            console.log(`[LLMHelper] streamChat: routing multimodal request to Ollama vision model: ${targetVisionModel}`);
+          }
+        }
+      }
+      yield* this.streamWithOllama(
+        contextOsGoverningBlock ? userContent : message,
+        contextOsGoverningBlock ? undefined : combinedContext || undefined,
+        ollamaSystemPrompt,
+        imagePaths,
+        abortSignal,
+        targetVisionModel
+      );
       return;
     }
 
@@ -6786,7 +6886,17 @@ const isMultimodal = !!(imagePaths?.length);
     // When a screenshot is attached and the primary model is text-only, the
     // caller passes the resolved vision-capable model here so the image is
     // actually understood instead of silently dropped.
-    const ollamaModel = modelOverride || this.ollamaModel;
+    let ollamaModel = modelOverride || this.ollamaModel;
+    if (imagePaths?.length) {
+      const capabilities = getModelCapabilities(ollamaModel, true);
+      if (!capabilities.supportsImages) {
+        const visionModel = this.ollamaVisionModel || (await this.refreshOllamaVisionModel());
+        if (visionModel) {
+          ollamaModel = visionModel;
+          console.log(`[LLMHelper] streamWithOllama auto-switched to vision model: ${ollamaModel}`);
+        }
+      }
+    }
     let userContent = context ? `CONTEXT:\n${context}\n\nUSER:\n${message}` : message;
     // Per-request hard guard: trim userContent (never systemPrompt) until total fits the model's max ctx.
     {
@@ -6814,6 +6924,14 @@ const isMultimodal = !!(imagePaths?.length);
         }
       }
       if (encoded.length) images = encoded;
+    }
+
+    // Guard against 400 rejection if model is still text-only
+    const activeCaps = getModelCapabilities(ollamaModel, true);
+    if (!activeCaps.supportsImages && images?.length) {
+      console.warn(`[LLMHelper] streamWithOllama: active model ${ollamaModel} is text-only. Omitting images payload to prevent 400 rejection.`);
+      images = undefined;
+      userContent = `[Note: A screenshot was provided, but local model ${ollamaModel} does not support vision. Please answer using available text context.]\n\n${userContent}`;
     }
 
     // CACHE ORDERING INVARIANT (Ollama KV-prefix reuse): static system prompt
@@ -7164,7 +7282,9 @@ const isMultimodal = !!(imagePaths?.length);
 
       const data = await response.json();
       if (data && data.models) {
-        return data.models.map((m: any) => m.name);
+        return data.models
+          .map((m: any) => m.name)
+          .filter((name: string) => !/embed|bge-|minilm|arctic/i.test(name));
       }
 
       return [];
@@ -7248,10 +7368,10 @@ const isMultimodal = !!(imagePaths?.length);
    * Concurrent calls (init + switch + lazy-from-chain) share one in-flight
    * probe to avoid redundant /api/show round-trips.
    */
-  public async refreshOllamaVisionModel(): Promise<string | null> {
+  public async refreshOllamaVisionModel(forceProbe: boolean = false): Promise<string | null> {
     if (this.ollamaVisionRefreshInFlight) return this.ollamaVisionRefreshInFlight;
     const run = (async (): Promise<string | null> => {
-      if (!this.useOllama) { this.ollamaVisionModel = null; return null; }
+      if (!this.useOllama && !forceProbe) { this.ollamaVisionModel = null; return null; }
       try {
         const models = await this.getOllamaModels();
         if (models.length === 0) { this.ollamaVisionModel = null; return null; }
@@ -7357,8 +7477,9 @@ const isMultimodal = !!(imagePaths?.length);
     }
   }
 
-  public getCurrentProvider(): "ollama" | "gemini" | "custom" | "codex-cli" {
+  public getCurrentProvider(): "ollama" | "gemini" | "custom" | "codex-cli" | "antigravity" {
     if (this.customProvider) return "custom";
+    if (this.isUsingAntigravity()) return "antigravity";
     if (this.isCodexCliModel(this.currentModelId)) return "codex-cli";
     return this.useOllama ? "ollama" : "gemini";
   }
@@ -7386,6 +7507,7 @@ const isMultimodal = !!(imagePaths?.length);
   public getCurrentModelDisplayName(): string {
     if (this.customProvider) return this.customProvider.name;
     if (this.activeCurlProvider) return this.activeCurlProvider.id;
+    if (this.isUsingAntigravity()) return this.antigravityConfig.model ? `Antigravity (${this.antigravityConfig.model})` : 'Antigravity';
     return this.useOllama ? this.ollamaModel : this.currentModelId;
   }
 

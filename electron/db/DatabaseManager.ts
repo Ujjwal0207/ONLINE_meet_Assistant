@@ -2925,7 +2925,7 @@ natively.contact@gmail.com`;
                 { speaker: 'user', text: "What about the other buttons?", timestamp: 30000 },
                 { speaker: 'interviewer', text: "'Follow Up Questions' suggests questions you can ask. 'Answer' lets you speak a question and get an instant response.", timestamp: 35000 },
                 { speaker: 'user', text: "Can I take screenshots during calls?", timestamp: 45000 },
-                { speaker: 'interviewer', text: "Yes! Press Cmd+H for full screen or Cmd+Shift+H to select an area. The AI will analyze it and help you.", timestamp: 50000 },
+                { speaker: 'interviewer', text: "Yes! Press Cmd+Shift+H for full screen or Cmd+Option+Shift+H to select an area. The AI will analyze it and help you.", timestamp: 50000 },
                 { speaker: 'user', text: "How do I hide Natively during screen share?", timestamp: 60000 },
                 { speaker: 'interviewer', text: "Press Cmd+B to toggle visibility anytime. You can also enable undetectable mode in settings.", timestamp: 65000 },
                 { speaker: 'user', text: "This is amazing. What happens after the call?", timestamp: 75000 },

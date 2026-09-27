@@ -2,6 +2,7 @@
 
 import path from "node:path"
 import fs from "node:fs"
+import os from "node:os"
 import { app, desktopCapturer, screen, systemPreferences, clipboard, nativeImage } from "electron"
 import { v4 as uuidv4 } from "uuid"
 import util from "util"
@@ -30,32 +31,19 @@ const shellExecAsync = util.promisify(execShell);
  */
 function assertScreenRecordingPermission(): void {
   if (process.platform !== 'darwin') return;
-  // In development mode, bypass the permission check so screenshots work without
-  // needing the app to be in the TCC whitelist (same policy as the startup check in main.ts).
-  if (!app.isPackaged) return;
+  // In development mode or when dev bypass is explicitly set, bypass the permission check
+  if (!app.isPackaged || process.env.NATIVELY_DEV_BYPASS_SCREEN_TCC === '1') return;
   const status = systemPreferences.getMediaAccessStatus('screen');
   switch (status) {
     case 'granted':
       return;
     case 'denied':
-      throw new Error(
-        'Screen Recording permission is denied. Enable it in System Settings > ' +
-        'Privacy & Security > Screen Recording, then restart Natively.'
-      );
     case 'restricted':
-      throw new Error(
-        'Screen Recording is restricted by a device policy (MDM or parental controls). ' +
-        'Contact your administrator to allow screen capture.'
-      );
     case 'not-determined':
-      // The one-time TCC prompt should have fired at app startup (initializeApp).
-      // If we land here it means the prompt was cancelled/failed — a second
-      // getSources() call without a focused window will create a worse UX (dialog
-      // appears behind other apps on macOS Sequoia). Tell the user to restart instead.
-      throw new Error(
-        'Screen Recording permission has not been granted yet. ' +
-        'Please restart Natively — you will be prompted to grant access on next launch.'
-      );
+      // Do not throw or force-open System Preferences here; doing so hijacks user
+      // focus and aborts the capture before the screencapture fallback can execute.
+      console.warn(`[ScreenshotHelper] macOS screen recording status: ${status}. Attempting capture with fallback.`);
+      return;
   }
 }
 
@@ -276,14 +264,15 @@ async function getDisplaysIntersectingSelection(
       source = sources[displayIndex] || sources[0];
     }
     
-    if (!source) {
-      source = sources[0];
-    }
+    if (!source) throw new Error(`No capture source is available for display ${display.id}.`);
     
     console.log(`[ScreenshotHelper] Final source for display ${display.id}: ${source.name}`);
     
     // Get source thumbnail info
     const sourceSize = source.thumbnail.getSize();
+    if (sourceSize.width <= 0 || sourceSize.height <= 0 || source.thumbnail.isEmpty?.()) {
+      throw new Error('Screen capture returned an empty image. Check Screen Recording permission and try again.');
+    }
     console.log(`[ScreenshotHelper] Source thumbnail size: ${sourceSize.width}x${sourceSize.height}, display bounds: ${display.bounds.width}x${display.bounds.height}`);
 
     // CRITICAL: desktopCapturer returns thumbnail in DISPLAY'S NATIVE resolution
@@ -297,6 +286,10 @@ async function getDisplaysIntersectingSelection(
     const clampedCrop = computeThumbnailCrop(sourceSize, display.bounds, intersection);
 
     console.log(`[ScreenshotHelper] Crop params: x=${clampedCrop.x}, y=${clampedCrop.y}, w=${clampedCrop.width}, h=${clampedCrop.height}`);
+
+    if (clampedCrop.width <= 0 || clampedCrop.height <= 0) {
+      throw new Error('Region capture failed: selection did not map to a valid crop.');
+    }
 
     const cropped = source.thumbnail.crop(clampedCrop);
     
@@ -583,6 +576,10 @@ export class ScreenshotHelper {
     console.log(`[ScreenshotHelper] Final source: ${selectedSource.name} (id: ${selectedSource.id})`);
     
     let image = selectedSource.thumbnail;
+    const capturedSize = image.getSize();
+    if (capturedSize.width <= 0 || capturedSize.height <= 0 || image.isEmpty?.()) {
+      throw new Error('Screen capture returned an empty image. Check Screen Recording permission and try again.');
+    }
 
     if (area) {
       // Crop rect: area is in absolute screen coordinates. Derive the crop from the
@@ -623,7 +620,9 @@ export class ScreenshotHelper {
     }
 
     try {
-      await fs.promises.writeFile(outputPath, image.toPNG());
+      const png = image.toPNG();
+      if (png.length === 0) throw new Error('Screen capture returned an empty PNG.');
+      await fs.promises.writeFile(outputPath, png);
       console.log(`[ScreenshotHelper] Screenshot saved to: ${outputPath}`);
     } catch (writeError) {
       console.error('[ScreenshotHelper] Failed to write screenshot to disk:', writeError);
@@ -645,13 +644,13 @@ export class ScreenshotHelper {
    * Platform-aware screenshot command builder.
    * Linux-only in practice. macOS and Windows use desktopCapturer APIs instead.
    */
-  private getScreenshotCommand(outputPath: string, interactive: boolean): string {
+  private getScreenshotCommand(outputPath: string, interactive: boolean, area?: Electron.Rectangle): string {
     // Safety: outputPath must be within our controlled directories.
     // Since we always construct paths using path.join(this.screenshotDir, uuidv4()),
     // this assertion guards against any future regression where external input could reach here.
     // This is a defense-in-depth measure against path traversal attacks.
     const userDataDir = app.getPath('userData');
-    if (!outputPath.startsWith(userDataDir)) {
+    if (!outputPath.startsWith(userDataDir) && !outputPath.startsWith(os.tmpdir())) {
       throw new Error(`[ScreenshotHelper] Refusing shell command for path outside userData: ${outputPath}`);
     }
     const safePath = outputPath.replace(/"/g, '\\"');
@@ -660,6 +659,14 @@ export class ScreenshotHelper {
       return interactive
         ? `gnome-screenshot -a -f "${safePath}" 2>/dev/null || scrot -s "${safePath}" 2>/dev/null || import "${safePath}"`
         : `gnome-screenshot -f "${safePath}" 2>/dev/null || scrot "${safePath}" 2>/dev/null || import -window root "${safePath}"`;
+    }
+    if (platform === 'darwin') {
+      if (area) {
+        return `screencapture -x -R${Math.round(area.x)},${Math.round(area.y)},${Math.round(area.width)},${Math.round(area.height)} "${safePath}"`;
+      }
+      return interactive
+        ? `screencapture -i "${safePath}"`
+        : `screencapture -x "${safePath}"`;
     }
     throw new Error(`Unsupported platform for screenshots: ${platform}`);
   }
@@ -674,9 +681,18 @@ export class ScreenshotHelper {
         screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
         console.log(`[ScreenshotHelper] Using queue directory: ${screenshotPath}`);
         if (process.platform === 'darwin') {
-          await this.captureWithDesktopCapturer(screenshotPath, undefined, preferredDisplay);
+          try {
+            await this.captureWithDesktopCapturer(screenshotPath, undefined, preferredDisplay);
+          } catch (capErr: any) {
+            console.warn('[ScreenshotHelper] desktopCapturer failed on darwin, falling back to screencapture:', capErr?.message);
+            try {
+              await shellExecAsync(this.getScreenshotCommand(screenshotPath, false, preferredDisplay?.bounds));
+            } catch (fallbackErr: any) {
+              throw capErr;
+            }
+          }
         } else if (process.platform === 'win32') {
-          await this.captureWithDesktopCapturer(screenshotPath);
+          await this.captureWithDesktopCapturer(screenshotPath, undefined, preferredDisplay);
         } else {
           await shellExecAsync(this.getScreenshotCommand(screenshotPath, false))
         }
@@ -697,9 +713,18 @@ export class ScreenshotHelper {
         screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
         console.log(`[ScreenshotHelper] Using extra screenshots directory: ${screenshotPath}`);
         if (process.platform === 'darwin') {
-          await this.captureWithDesktopCapturer(screenshotPath, undefined, preferredDisplay);
+          try {
+            await this.captureWithDesktopCapturer(screenshotPath, undefined, preferredDisplay);
+          } catch (capErr: any) {
+            console.warn('[ScreenshotHelper] desktopCapturer failed on darwin, falling back to screencapture:', capErr?.message);
+            try {
+              await shellExecAsync(this.getScreenshotCommand(screenshotPath, false, preferredDisplay?.bounds));
+            } catch (fallbackErr: any) {
+              throw capErr;
+            }
+          }
         } else if (process.platform === 'win32') {
-          await this.captureWithDesktopCapturer(screenshotPath);
+          await this.captureWithDesktopCapturer(screenshotPath, undefined, preferredDisplay);
         } else {
           await shellExecAsync(this.getScreenshotCommand(screenshotPath, false))
         }
@@ -738,12 +763,33 @@ export class ScreenshotHelper {
         // Check if selection spans multiple displays
         const isMulti = isMultiDisplaySelection(captureArea);
 
-        if (isMulti) {
-          console.log('[ScreenshotHelper] Selection spans multiple displays - using stitched capture');
-          await this.captureStitchedDesktopArea(screenshotPath, captureArea);
-        } else {
-          console.log('[ScreenshotHelper] Selection within single display - using standard capture');
-          await this.captureWithDesktopCapturer(screenshotPath, captureArea);
+        try {
+          if (isMulti) {
+            console.log('[ScreenshotHelper] Selection spans multiple displays - using stitched capture');
+            await this.captureStitchedDesktopArea(screenshotPath, captureArea);
+          } else {
+            console.log('[ScreenshotHelper] Selection within single display - using standard capture');
+            await this.captureWithDesktopCapturer(screenshotPath, captureArea);
+          }
+        } catch (captureErr: any) {
+          if (captureErr?.message?.startsWith('Region capture failed')) {
+            throw captureErr;
+          }
+          if (process.platform === 'darwin') {
+            console.warn('[ScreenshotHelper] desktopCapturer selective failed on darwin, falling back to screencapture -R:', captureErr);
+            await shellExecAsync(this.getScreenshotCommand(screenshotPath, false, captureArea));
+          } else {
+            throw captureErr;
+          }
+        }
+      } else if (process.platform === 'darwin' && !captureArea) {
+        // macOS interactive selection using native crosshair
+        console.log('[ScreenshotHelper] Using macOS native interactive selection (screencapture -i)');
+        try {
+          await shellExecAsync(this.getScreenshotCommand(screenshotPath, true));
+        } catch (e: any) {
+          console.warn('[ScreenshotHelper] User cancelled selection or error occurred:', e);
+          throw new Error("Selection cancelled");
         }
       } else if (process.platform === 'linux') {
         // Linux: use interactive selection command

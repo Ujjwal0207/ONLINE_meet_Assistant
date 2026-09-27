@@ -10,6 +10,8 @@ import { AudioDevices } from './audio/AudioDevices';
 import { DatabaseManager } from './db/DatabaseManager'; // Import Database Manager
 import { AppState } from './main';
 import { CodexCliService } from './services/CodexCliService';
+import { AntigravityService } from './services/AntigravityService';
+import type { AntigravityConfig } from '../src/types/antigravity';
 import { PhoneMirrorService } from './services/PhoneMirrorService';
 import { sanitizeContextEnvelope } from './services/browser-context/sanitize';
 import { formatEnvelopeForPrompt } from './services/browser-context/formatEnvelopeForPrompt';
@@ -219,6 +221,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       };
       const modelAvailable = (modelId: string): boolean => {
         if (!modelId) return false;
+        if (modelId === 'antigravity') return llmHelper.getAntigravityConfig().enabled;
         if (modelId === 'natively') return has(cm.getNativelyApiKey());
         if (modelId.startsWith('codex-cli')) return codexConfig.enabled === true && codexSignedIn;
         if (modelId.startsWith('litellm/')) return has(cm.getLitellmBaseURL());
@@ -597,9 +600,11 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const screenshotPath = await appState.takeScreenshot();
       const preview = await appState.getImagePreview(screenshotPath);
+      appState.broadcastScreenshotAttached({ path: screenshotPath, preview });
       return { path: screenshotPath, preview };
     } catch (error) {
-      // console.error("Error taking screenshot:", error)
+      const reason = error instanceof Error ? error.message : String(error);
+      appState.sendSystemAudioPermissionDenied(`Unable to capture the screen: ${reason}`);
       throw error;
     }
   });
@@ -608,12 +613,15 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const screenshotPath = await appState.takeSelectiveScreenshot();
       const preview = await appState.getImagePreview(screenshotPath);
+      appState.broadcastScreenshotAttached({ path: screenshotPath, preview });
       return { path: screenshotPath, preview };
     } catch (error) {
       // EC-04 fix: cast unknown error to Error before accessing .message
       if ((error as Error).message === 'Selection cancelled') {
         return { cancelled: true };
       }
+      const reason = error instanceof Error ? error.message : String(error);
+      appState.sendSystemAudioPermissionDenied(`Unable to capture the selected area: ${reason}`);
       throw error;
     }
   });
@@ -851,7 +859,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       message: string,
       imagePaths?: string[],
       context?: string,
-      options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean },
+      options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean; referenceText?: string },
     ): Promise<null> => {
       let myController: AbortController | null = null;
       let _manualFgToken: string | null = null;
@@ -2041,35 +2049,37 @@ export function initializeIpcHandlers(appState: AppState): void {
           //      path (formatAnswerPlanForPrompt with the full CODING_TEMPLATE) — byte
           //      unchanged from before this fix.
           const planIsCodingType = isCodingAnswerType(answerPlan.answerType);
+          const incomingConversationContext = context;
           if (explicitCodingContract) {
             const includeVerification = explicitContractProducesCode(explicitCodingContract) && isCodeVerificationEnabled();
             const codingContract = buildCodingContractPrompt(explicitCodingContract, {
               includeVerification,
               verificationInstruction: CODING_VERIFICATION_INSTRUCTION,
             });
-            context = codingPriorProblemBlock ? `${codingContract}\n\n${codingPriorProblemBlock}` : codingContract;
+            const base = codingPriorProblemBlock ? `${codingContract}\n\n${codingPriorProblemBlock}` : codingContract;
+            context = incomingConversationContext ? `${base}\n\n## CONVERSATION HISTORY:\n${incomingConversationContext}` : base;
           } else if (planIsCodingType) {
-            // Plain coding question (no constraint) → the EXACT proven path, byte unchanged.
+            // Plain coding question (no constraint)
             const baseContract = formatAnswerPlanForPrompt(answerPlan, isCodeVerificationEnabled());
-            context = codingPriorProblemBlock ? `${baseContract}\n\n${codingPriorProblemBlock}` : baseContract;
+            const base = codingPriorProblemBlock ? `${baseContract}\n\n${codingPriorProblemBlock}` : baseContract;
+            context = incomingConversationContext ? `${base}\n\n## CONVERSATION HISTORY:\n${incomingConversationContext}` : base;
           } else {
-            // A follow-up ("now optimize it") promoted to coding though the plan type is
-            // follow_up/unknown → use the full six-section coding contract (null builder),
-            // NOT the follow_up template, plus the prior problem.
             const codingContract = buildCodingContractPrompt(null, {
               includeVerification: isCodeVerificationEnabled(),
               verificationInstruction: CODING_VERIFICATION_INSTRUCTION,
             });
-            context = codingPriorProblemBlock ? `${codingContract}\n\n${codingPriorProblemBlock}` : codingContract;
+            const base = codingPriorProblemBlock ? `${codingContract}\n\n${codingPriorProblemBlock}` : codingContract;
+            context = incomingConversationContext ? `${base}\n\n## CONVERSATION HISTORY:\n${incomingConversationContext}` : base;
           }
-          console.log('[IPC] Coding contract enforced; rolling context excluded', {
+          console.log('[IPC] Coding contract enforced; context preserved', {
             answerType: answerPlan.answerType,
             explicitContract: explicitCodingContract || 'none',
             followupResolved: codingFollowupResolved,
           });
         } else if (isContractEnforced) {
-          context = formatAnswerPlanForPrompt(answerPlan, false);
-          console.log('[IPC] Answer-contract enforced; rolling context excluded', {
+          const enforced = formatAnswerPlanForPrompt(answerPlan, false);
+          context = context ? `${enforced}\n\n## CONVERSATION HISTORY:\n${context}` : enforced;
+          console.log('[IPC] Answer-contract enforced; context preserved', {
             answerType: answerPlan.answerType,
           });
         } else if (!context && autoContextSnapshot) {
@@ -2625,6 +2635,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             {
               answerType: answerPlan.answerType,
               forbiddenContextLayers: answerPlan.forbiddenContextLayers,
+              referenceText: options?.referenceText,
               // Surface-scoped (Phase 9, 2026-07-14): the referent hint must come
               // from THIS manual-chat conversation's own last answer, never a
               // WTA/phone-mirror turn that happened to write the shared
@@ -2758,12 +2769,16 @@ export function initializeIpcHandlers(appState: AppState): void {
           // local generation aborted to zero tokens and the user saw the canned
           // fallback line below. Codex CLI shares the cold-load profile
           // (subprocess spawn → codex CLI loads the model → first delta).
-          const usingLocalLlm = llmHelper.isUsingOllama() || llmHelper.isUsingCodexCli();
+          const usingAntigravity = llmHelper.isUsingAntigravity();
+          const usingLocalLlm = llmHelper.isUsingOllama() || llmHelper.isUsingCodexCli() || usingAntigravity;
           let manualFirstUseful = false;
           let manualSuperseded = false;
-          await raceStreamWithDeadline({
+          const manualStreamResult = await raceStreamWithDeadline({
             stream: stream as AsyncGenerator<string>,
-            firstUsefulDeadlineMs: firstUsefulDeadlineMs(answerPlan.answerType, usingLocalLlm),
+            firstUsefulDeadlineMs: usingAntigravity
+              ? llmHelper.getAntigravityConfig().timeoutMs
+              : firstUsefulDeadlineMs(answerPlan.answerType, usingLocalLlm),
+            interTokenStallMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : undefined,
             isUsefulYet: () => manualFirstUseful,
             shouldAbort: () => {
               if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) {
@@ -2801,6 +2816,10 @@ export function initializeIpcHandlers(appState: AppState): void {
               .lifecycle('cancelled', { reason: 'superseded', finalAction: 'discard' });
             commitTrace(iTrace);
             return null;
+          }
+
+          if (usingAntigravity && (manualStreamResult === 'first_useful_timeout' || manualStreamResult === 'stall_timeout')) {
+            throw new Error('Antigravity did not answer before the request timed out. Try again or increase the timeout in Antigravity settings.');
           }
 
           // Flush any tokens still held by the gate (short answer that never
@@ -2899,7 +2918,8 @@ export function initializeIpcHandlers(appState: AppState): void {
                 const regenAbort = new AbortController();
                 await raceStreamWithDeadline({
                   stream: llmHelper.streamChat(regenPrompt, undefined, codingPriorProblemBlock || undefined, undefined, true, true, [], regenAbort.signal) as AsyncGenerator<string>,
-                  firstUsefulDeadlineMs: usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 8000,
+                  firstUsefulDeadlineMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 8000,
+                  interTokenStallMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : undefined,
                   isUsefulYet: () => regen.length >= 10,
                   shouldAbort: () => regen.length > 4000,
                   onToken: (tok: string) => { regen += tok; },
@@ -2979,7 +2999,8 @@ export function initializeIpcHandlers(appState: AppState): void {
                 const regenAbort = new AbortController();
                 await raceStreamWithDeadline({
                   stream: llmHelper.streamChat(regenPrompt, undefined, codingPriorProblemBlock || undefined, undefined, true, true, [], regenAbort.signal) as AsyncGenerator<string>,
-                  firstUsefulDeadlineMs: usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 8000,
+                  firstUsefulDeadlineMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 8000,
+                  interTokenStallMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : undefined,
                   isUsefulYet: () => regen.length >= 10,
                   shouldAbort: () => regen.length > 4000,
                   onToken: (tok: string) => { regen += tok; },
@@ -3096,7 +3117,8 @@ export function initializeIpcHandlers(appState: AppState): void {
                   // Local model: longer budget for the same cold-load reason as above.
                   await raceStreamWithDeadline({
                     stream: llmHelper.streamChat(repairPrompt, undefined, undefined, undefined, true, true) as AsyncGenerator<string>,
-                    firstUsefulDeadlineMs: usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
+                    firstUsefulDeadlineMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
+                    interTokenStallMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : undefined,
                     isUsefulYet: () => repaired.length >= 5,
                     shouldAbort: () => repaired.length > 1200,
                     onToken: (tok: string) => { repaired += tok; },
@@ -4042,7 +4064,8 @@ export function initializeIpcHandlers(appState: AppState): void {
                     // after extraDataScopes) to also satisfy the compiler —
                     // passing it as arg #7 typechecked as ProviderDataScope[].
                     stream: llmHelper.streamChat(strictPrompt, undefined, undefined, regenSystemPrompt, true, true, [], regenAbort.signal) as AsyncGenerator<string>,
-                    firstUsefulDeadlineMs: usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
+                    firstUsefulDeadlineMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
+                    interTokenStallMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : undefined,
                     isUsefulYet: () => regen.length >= 8,
                     shouldAbort: () => regen.length > 2000,
                     onToken: (tok: string) => { regen += tok; },
@@ -4440,7 +4463,8 @@ export function initializeIpcHandlers(appState: AppState): void {
                       let fixed = '';
                       await raceStreamWithDeadline({
                         stream: llmHelper.streamChat(repairPrompt, undefined, undefined, undefined, true, true) as AsyncGenerator<string>,
-                        firstUsefulDeadlineMs: 7000,
+                        firstUsefulDeadlineMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : 7000,
+                        interTokenStallMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : undefined,
                         isUsefulYet: () => fixed.length >= 5,
                         onToken: (tok: string) => { fixed += tok; },
                       });
@@ -4478,7 +4502,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           try {
             const klass = classifyProviderError(streamError);
             piTelemetry.emit('pi_provider_error_classified', { kind: klass.kind, outage: klass.isOutage, retryable: klass.retryable, surface: 'manual' });
-            if (answerPlan.profileContextPolicy === 'required' && !fullResponse.trim()
+            if (!llmHelper.isUsingAntigravity() && answerPlan.profileContextPolicy === 'required' && !fullResponse.trim()
                 && _chatStreamsBySender.get(senderId)?.streamId === myStreamId) {
               const safe = "The model failed before generating an answer, so I won't guess from your profile. Please try again.";
               finalGenerationMode = 'provider_error_no_answer';
@@ -7545,6 +7569,37 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  safeHandle('get-antigravity-config', () => appState.processingHelper.getLLMHelper().getAntigravityConfig());
+
+  safeHandle('set-antigravity-config', (_, config: Partial<AntigravityConfig>) => {
+    try {
+      if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Invalid Antigravity settings.');
+      const helper = appState.processingHelper.getLLMHelper();
+      const normalized = AntigravityService.normalizeConfig({ ...helper.getAntigravityConfig(), ...config });
+      SettingsManager.getInstance().set('antigravityConfig', normalized);
+      helper.setAntigravityConfig(normalized);
+      broadcastCredentialsChanged();
+      return { success: true, config: normalized };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle('get-antigravity-status', () => AntigravityService.getStatus(appState.processingHelper.getLLMHelper().getAntigravityConfig()));
+
+  safeHandle('test-antigravity', async (_, config?: Partial<AntigravityConfig>) => {
+    try {
+      const current = appState.processingHelper.getLLMHelper().getAntigravityConfig();
+      const normalized = AntigravityService.normalizeConfig({ ...current, ...config, enabled: true });
+      const response = await AntigravityService.run(normalized, {
+        prompt: 'Reply with exactly: Antigravity connected.',
+      });
+      return { success: true, response };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
   safeHandle('get-codex-cli-config', () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
@@ -7845,8 +7900,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     return AudioDevices.getOutputDevices();
   });
 
-  safeHandle('start-audio-test', async (event, deviceId?: string) => {
-    await appState.startAudioTest(deviceId);
+  safeHandle('start-audio-test', async (event, deviceId?: string, outputDeviceId?: string) => {
+    await appState.startAudioTest(deviceId, outputDeviceId);
     return { success: true };
   });
 
@@ -9952,7 +10007,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           const capturable = sources.some((s) => s.id.startsWith('screen:'));
           if (capturable) screen = 'granted';
         } catch {
-          // Probe failed or timed out — keep the raw status (treat as not-granted).
+          // Probe failed or timed out.
         }
       }
 

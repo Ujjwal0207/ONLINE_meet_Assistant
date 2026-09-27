@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { SkillUploadPayload } from './services/skills/SkillValidator';
+import type { AntigravityConfig, AntigravityConfigResult, AntigravityStatus, AntigravityTestResult } from '../src/types/antigravity';
 
 /**
  * Metadata the companion extension sends with a captured page (drives the
@@ -35,7 +36,7 @@ interface ElectronAPI {
 
   onUnauthorized: (callback: () => void) => () => void;
   onDebugError: (callback: (error: string) => void) => () => void;
-  takeScreenshot: () => Promise<void>;
+  takeScreenshot: () => Promise<{ path: string; preview: string }>;
   takeSelectiveScreenshot: () => Promise<{ path: string; preview: string; cancelled?: boolean }>;
   moveWindowLeft: () => Promise<void>;
   moveWindowRight: () => Promise<void>;
@@ -61,8 +62,12 @@ interface ElectronAPI {
   restartApp: () => Promise<void>;
 
   // LLM Model Management
+  getAntigravityConfig: () => Promise<AntigravityConfig>;
+  setAntigravityConfig: (config: Partial<AntigravityConfig>) => Promise<AntigravityConfigResult>;
+  getAntigravityStatus: () => Promise<AntigravityStatus>;
+  testAntigravity: (config?: Partial<AntigravityConfig>) => Promise<AntigravityTestResult>;
   getCurrentLlmConfig: () => Promise<{
-    provider: 'ollama' | 'gemini' | 'custom' | 'codex-cli';
+    provider: 'ollama' | 'gemini' | 'custom' | 'codex-cli' | 'antigravity';
     /**
      * @deprecated Use `modelId` for selection comparisons and `displayName`
      * for UI labels. Kept as an alias of `modelId` for back-compat.
@@ -594,7 +599,7 @@ interface ElectronAPI {
   }) => Promise<{ success: boolean; error?: string }>;
 
   // Audio Test
-  startAudioTest: (deviceId?: string) => Promise<{ success: boolean }>;
+  startAudioTest: (deviceId?: string, outputDeviceId?: string) => Promise<{ success: boolean }>;
   stopAudioTest: () => Promise<{ success: boolean }>;
   onAudioTestLevel: (callback: (level: number) => void) => () => void;
   // UX4: parallel system-audio probe — system audio level + error events
@@ -626,7 +631,7 @@ interface ElectronAPI {
     message: string,
     imagePaths?: string[],
     context?: string,
-    options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean },
+    options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean; referenceText?: string },
   ) => Promise<void>;
   onGeminiStreamToken: (callback: (token: string, meta?: { streamId?: number }) => void) => () => void;
   onGeminiStreamDone: (callback: (data?: { finalText?: string; streamId?: number }) => void) => () => void;
@@ -1976,6 +1981,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Groq Fast Text Mode
   getGroqFastTextMode: () => ipcRenderer.invoke('get-groq-fast-text-mode'),
   setGroqFastTextMode: (enabled: boolean) => ipcRenderer.invoke('set-groq-fast-text-mode', enabled),
+  getAntigravityConfig: () => ipcRenderer.invoke('get-antigravity-config'),
+  setAntigravityConfig: (config: Partial<AntigravityConfig>) => ipcRenderer.invoke('set-antigravity-config', config),
+  getAntigravityStatus: () => ipcRenderer.invoke('get-antigravity-status'),
+  testAntigravity: (config?: Partial<AntigravityConfig>) => ipcRenderer.invoke('test-antigravity', config),
   getCodexCliConfig: () => ipcRenderer.invoke('get-codex-cli-config'),
   setCodexCliConfig: (config: {
     enabled: boolean;
@@ -2046,7 +2055,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('open-mailto', params),
 
   // Audio Test
-  startAudioTest: (deviceId?: string) => ipcRenderer.invoke('start-audio-test', deviceId),
+  startAudioTest: (deviceId?: string, outputDeviceId?: string) => ipcRenderer.invoke('start-audio-test', deviceId, outputDeviceId),
   stopAudioTest: () => ipcRenderer.invoke('stop-audio-test'),
   onAudioTestLevel: (callback: (level: number) => void) => {
     const subscription = (_: any, level: number) => callback(level);

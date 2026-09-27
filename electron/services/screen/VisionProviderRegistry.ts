@@ -165,20 +165,40 @@ function groqScout(creds: CredentialsManager, _inputs: VisionProviderBuildInputs
   };
 }
 
+function readActiveOllamaVisionModelSync(): string | null {
+  try {
+    const g = global as any;
+    if (typeof g.__nativelyGetLLMHelper === 'function') {
+      const helper = g.__nativelyGetLLMHelper();
+      if (helper && typeof helper.getOllamaVisionModel === 'function') {
+        return helper.getOllamaVisionModel() || null;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 function ollama(creds: CredentialsManager, _inputs: VisionProviderBuildInputs): VisionProviderConfig {
-  const baseUrl = (creds.getAllCredentials() as any)?.ollamaBaseUrl as string | undefined;
-  const ollamaModel = (creds.getAllCredentials() as any)?.ollamaModel as string | undefined;
-  const isVisionModel = ollamaModel ? isOllamaVisionModel(ollamaModel) : false;
+  const allCreds = (creds.getAllCredentials() as any) || {};
+  const baseUrl = allCreds.ollamaBaseUrl || 'http://127.0.0.1:11434';
+  const configuredModel = allCreds.ollamaModel as string | undefined;
+  const helperVisionModel = readActiveOllamaVisionModelSync();
+  const effectiveModel = (configuredModel && isOllamaVisionModel(configuredModel))
+    ? configuredModel
+    : (helperVisionModel || configuredModel || 'gemma3:4b');
+  const isVisionModel = isOllamaVisionModel(effectiveModel);
   return {
     id: 'ollama',
     displayName: 'Ollama (local)',
-    modelId: ollamaModel,
+    modelId: effectiveModel,
     isLocal: true,
-    isConfigured: !!baseUrl && !!ollamaModel,
+    isConfigured: true,
     supportsVision: isVisionModel,
     scopeAllowsScreenshots: true,
     hint: 'ollama',
-    invoke: async (p) => callOllamaVision(baseUrl!, ollamaModel!, p),
+    invoke: async (p) => callOllamaVision(baseUrl, effectiveModel, p),
   };
 }
 
