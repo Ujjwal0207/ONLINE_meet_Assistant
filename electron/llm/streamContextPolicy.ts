@@ -26,6 +26,8 @@ import type { AnswerType, ContextLayer } from './AnswerPlanner';
  * (default answer type, no extra exclusion) so no existing caller breaks.
  */
 export interface StreamRouteOptions {
+  /** User-selected Reference Knowledge text, carried independently of history. */
+  referenceText?: string;
   /** The plan's answer type — drives custom-context sensitivity scoping. */
   answerType?: AnswerType;
   /** The plan's forbidden context layers — the authoritative exclusion list. */

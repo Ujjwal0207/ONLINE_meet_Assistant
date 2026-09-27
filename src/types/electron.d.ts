@@ -415,6 +415,12 @@ export interface ElectronAPI {
   setAntigravityConfig: (config: Partial<AntigravityConfig>) => Promise<AntigravityConfigResult>;
   getAntigravityStatus: () => Promise<AntigravityStatus>;
   testAntigravity: (config?: Partial<AntigravityConfig>) => Promise<AntigravityTestResult>;
+  startAutoType: (params: import('./autotype').AutoTypeOptions) => Promise<{ success: boolean; error?: string }>;
+  cancelAutoType: () => Promise<{ success: boolean }>;
+  getAutoTypeState: () => Promise<import('./autotype').AutoTypeState>;
+  onAutoTypeState: (callback: (state: import('./autotype').AutoTypeState) => void) => () => void;
+  checkAccessibilityPermission: () => Promise<import('./autotype').AutoTypePermissionStatus>;
+  openAutoTypePermissionSettings: (kind: import('./autotype').AutoTypePermissionKind) => Promise<void>;
   getCodexCliConfig: () => Promise<{ enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string }>;
   setCodexCliConfig: (config: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode?: string; serviceTier?: string; modelReasoningEffort?: string }) => Promise<{ success: boolean; error?: string; config?: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string } }>;
   testCodexCli: (config?: { enabled?: boolean; path?: string; model?: string; fastModel?: string; timeoutMs?: number; sandboxMode?: string; serviceTier?: string; modelReasoningEffort?: string }) => Promise<{ success: boolean; error?: string; resolvedPath?: string; config?: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string } }>;

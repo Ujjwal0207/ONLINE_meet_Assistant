@@ -24,12 +24,15 @@ import {
   FileText,
   Upload,
   Trash2,
+  Keyboard,
 } from 'lucide-react';
+import { AutoTypeModal } from './AutoTypeModal';
 import {
   mergeRollingTranscriptFinal,
   mergeRollingTranscriptPartial,
 } from '../../electron/utils/rollingTranscriptState.ts';
 import { categorizeSttError } from '../lib/sttErrorMapper';
+import { buildConversationContextFromMessages, shouldUseLiveRagPreflight } from '../lib/conversationContext.mjs';
 
 import type { SkillSummary } from '../types/electron';
 
@@ -157,6 +160,26 @@ const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
 const displayLanguageName = (lang: string): string =>
   LANGUAGE_DISPLAY_NAMES[lang] || (lang ? lang[0].toUpperCase() + lang.slice(1) : '');
 
+const AutoTypeContext = React.createContext<((code: string) => void) | null>(null);
+
+const AutoTypeHeaderButton = ({ code }: { code: string }) => {
+  const onAutoType = React.useContext(AutoTypeContext);
+  const t = useT();
+  if (!onAutoType) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onAutoType(code)}
+      title={t("Auto-type code into compiler")}
+      aria-label={t("Auto-type code into compiler")}
+      className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium text-neutral-400 hover:text-white hover:bg-white/10 transition-colors"
+    >
+      <Keyboard className="w-3 h-3 text-blue-400" />
+      <span>{t("Auto-Type")}</span>
+    </button>
+  );
+};
+
 // Combined hover-reveal chrome for the headerless vivid-dark code block (see
 // HighlightedCode / StreamingHighlightedCode) — language name + copy button
 // as ONE capsule, not two independently absolute-positioned elements. The
@@ -165,6 +188,7 @@ const displayLanguageName = (lang: string): string =>
 // surface with one hover fade gives it a calmer, more cohesive feel.
 const CodeBlockChrome = ({ lang, code }: { lang: string; code: string }) => {
   const t = useT();
+  const onAutoType = React.useContext(AutoTypeContext);
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -192,6 +216,17 @@ const CodeBlockChrome = ({ lang, code }: { lang: string; code: string }) => {
         >
           {displayLanguageName(lang)}
         </span>
+      )}
+      {onAutoType && (
+        <button
+          type="button"
+          onClick={() => onAutoType(code)}
+          title={t("Auto-type code into compiler")}
+          aria-label={t("Auto-type code into compiler")}
+          className="relative w-5 h-5 flex items-center justify-center text-neutral-400 hover:text-white transition-colors duration-150 active:scale-95"
+        >
+          <Keyboard className="w-3.5 h-3.5 text-blue-400 hover:text-blue-300" />
+        </button>
       )}
       <button
         type="button"
@@ -421,22 +456,6 @@ interface NativelyInterfaceProps {
   interfaceTheme?: MeetingInterfaceTheme;
 }
 
-const buildConversationContextFromMessages = (items: Message[]): string =>
-  items
-    .filter((m) => {
-      if (m.isQuickActionLabel) return false;
-      const text = (m.text || '').trim();
-      if (!text) return false;
-      return m.role === 'user' || m.role === 'system' || m.role === 'interviewer';
-    })
-    .map((m) => {
-      const roleLabel = m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant';
-      const prefix = m.hasScreenshot && m.role === 'user' ? '[Screenshot query] ' : '';
-      return `${roleLabel}: ${prefix}${m.text.trim()}`;
-    })
-    .slice(-20)
-    .join('\n\n');
-
 // PERF: HighlightedCode renders a single fenced code block. Hoisted to module
 // scope and wrapped in React.memo so a parent re-render does not re-tokenize
 // existing code blocks. SyntaxHighlighter (Prism) has no internal render
@@ -502,6 +521,7 @@ const HighlightedCode = React.memo(
             >
               {resolved || 'CODE'}
             </span>
+            <AutoTypeHeaderButton code={code} />
           </div>
         )}
         {!showCodeHeader && (
@@ -681,6 +701,7 @@ export const StreamingHighlightedCode = React.memo(
             >
               {resolved || 'CODE'}
             </span>
+            <AutoTypeHeaderButton code={code} />
           </div>
         )}
         {!showCodeHeader && (
@@ -1002,6 +1023,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [conversationContext, setConversationContext] = useState<string>('');
   const [showReferenceModal, setShowReferenceModal] = useState(false);
+  const [autoTypeModalOpen, setAutoTypeModalOpen] = useState(false);
+  const [autoTypeCode, setAutoTypeCode] = useState('');
+  const handleOpenAutoType = useCallback((codeToType: string) => {
+    setAutoTypeCode(codeToType);
+    setAutoTypeModalOpen(true);
+  }, []);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [referenceText, setReferenceText] = useState(() => {
     try {
@@ -5610,6 +5637,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     return () => cleanups.forEach((fn) => fn());
   }, [currentModel, queueToken, flushToken]); // Ensure tracking captures correct model
 
+  const snapshotConversationContext = () => buildConversationContextFromMessages(messages, {
+    streamingMessageId: streamingMsgIdRef.current,
+    streamingText: streamingTextRef.current,
+    ragText: ragArrivedTextRef.current,
+  });
+
   const handleAnswerNow = async () => {
     if (isManualRecording) {
       if (!tryBeginOverlayAction('answer_now')) return;
@@ -5668,6 +5701,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
           return;
         }
 
+        const conversationContextForSubmit = snapshotConversationContext();
+        const refToSend = referenceTextActive && referenceText.trim() ? referenceText.trim() : undefined;
+        // Seal the prior answer only after snapshotting its full received text.
+        flushToken();
+        forceFinalizeStaleRagStream();
         setMessages((prev) => [
           ...prev,
           {
@@ -5683,10 +5721,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
           messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }, 50);
 
-        // A previous turn's RAG answer may still be deferred-draining (see
-        // forceFinalizeStaleRagStream's declaration) — force it to its final
-        // state before this new placeholder can become "the last message".
-        forceFinalizeStaleRagStream();
         const placeholderId = genMessageId();
         streamingMsgIdRef.current = placeholderId;
         streamingIntentRef.current = 'chat';
@@ -5722,9 +5756,13 @@ Instructions:
 2. Provide a direct, helpful answer.
 3. Be concise.`;
           } else {
-            const ragResult = await window.electronAPI.ragQueryLive?.(question);
-            if (ragResult?.success) {
-              return;
+            if (shouldUseLiveRagPreflight({
+              attachmentCount: currentAttachments.length,
+              conversationContext: conversationContextForSubmit,
+              referenceText: refToSend,
+            })) {
+              const ragResult = await window.electronAPI.ragQueryLive?.(question);
+              if (ragResult?.success) return;
             }
 
             prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
@@ -5742,8 +5780,8 @@ Provide only the answer, nothing else.`;
           await window.electronAPI.streamGeminiChat(
             question,
             currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
-            prompt,
-            { skipSystemPrompt: true },
+            conversationContextForSubmit ? `${prompt}\n\n## CONVERSATION HISTORY:\n${conversationContextForSubmit}` : prompt,
+            { skipSystemPrompt: true, referenceText: refToSend },
           );
         } catch (err) {
           setIsProcessing(false);
@@ -5815,7 +5853,8 @@ Provide only the answer, nothing else.`;
     lastManualSubmitRef.current = { text: userText, atMs: nowMs };
 
     const currentAttachments = attachedContext;
-    const conversationContextForSubmit = buildConversationContextFromMessages(messages);
+    const conversationContextForSubmit = snapshotConversationContext();
+    const refToSend = referenceTextActive && referenceText.trim() ? referenceText.trim() : undefined;
 
     // Clear inputs immediately
     setInputValue('');
@@ -5835,6 +5874,7 @@ Provide only the answer, nothing else.`;
       cancelAnimationFrame(tokenBufRef.current.raf);
       tokenBufRef.current.raf = null;
     }
+    forceFinalizeStaleRagStream();
     setMessages((prev) =>
       prev.some((m) => m.isStreaming)
         ? prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
@@ -5857,10 +5897,6 @@ Provide only the answer, nothing else.`;
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 50);
 
-    // A previous turn's RAG answer may still be deferred-draining (see
-    // forceFinalizeStaleRagStream's declaration) — force it to its final
-    // state before this new placeholder can become "the last message".
-    forceFinalizeStaleRagStream();
     // Add placeholder for streaming response — wire queueToken to this row so
     // the first gemini-stream-token does not spawn a second streaming bubble.
     const placeholderId = genMessageId();
@@ -5893,8 +5929,13 @@ Provide only the answer, nothing else.`;
     pinAnswerPanel();
 
     try {
-      // JIT RAG pre-flight: try to use indexed meeting context first
-      if (currentAttachments.length === 0) {
+      // Query-only meeting RAG cannot answer chat follow-ups or use the reference
+      // text. Those turns go through normal chat with their full context intact.
+      if (shouldUseLiveRagPreflight({
+        attachmentCount: currentAttachments.length,
+        conversationContext: conversationContextForSubmit,
+        referenceText: refToSend,
+      })) {
         const ragResult = await window.electronAPI.ragQueryLive?.(userText || '');
         if (ragResult?.success) {
           // JIT RAG handled it — response streamed via rag:stream-chunk events
@@ -5904,7 +5945,6 @@ Provide only the answer, nothing else.`;
 
       // Pass imagePath if attached, conversation context, and reference text
       requestStartTimeRef.current = Date.now();
-      const refToSend = referenceTextActive && referenceText.trim() ? referenceText.trim() : undefined;
       await window.electronAPI.streamGeminiChat(
         userText || (refToSend ? 'Analyze the reference material and answer' : 'Analyze this screenshot'),
         currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
@@ -7371,6 +7411,7 @@ Provide only the answer, nothing else.`;
   const clampedPickerIndex = Math.min(skillPickerIndex, Math.max(0, filteredSkills.length - 1));
 
   return (
+    <AutoTypeContext.Provider value={handleOpenAutoType}>
     <>
     {/* Standalone resize toggle — fixed to the top-right corner of the Electron
         window, completely outside the main panel body. Inherits screen-capture
@@ -8797,7 +8838,14 @@ Provide only the answer, nothing else.`;
         </div>
       )}
 
+      {/* Auto-Type into Compiler Modal */}
+      <AutoTypeModal
+        isOpen={autoTypeModalOpen}
+        code={autoTypeCode}
+        onClose={() => setAutoTypeModalOpen(false)}
+      />
     </>
+    </AutoTypeContext.Provider>
   );
 };
 

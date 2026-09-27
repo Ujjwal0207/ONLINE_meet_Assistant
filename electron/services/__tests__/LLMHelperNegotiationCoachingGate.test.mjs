@@ -514,6 +514,69 @@ test('streamChat: document-grounded custom mode fails closed if reference-file s
   );
 });
 
+test('streamChat: direct chat reference reaches a custom provider despite an active mode and stale evidence pack', async () => {
+  const helper = buildHelper();
+  const calls = attachDispatchSpy(helper);
+  installCustomDocumentMode({ documentGrounded: true });
+  let storedKnowledgeCalls = 0;
+  helper.knowledgeOrchestrator = {
+    isKnowledgeMode: () => true,
+    processQuestion: async () => { storedKnowledgeCalls++; return { isIntroQuestion: true, introResponse: 'UNRELATED_PROFILE' }; },
+  };
+  const referenceText = `${'Unrelated archive notes.\n'.repeat(12000)}\nMy ZephyrQueue project was built in Rust with 41 ms latency.\n`;
+  await drainStream(helper.streamChat(
+    'What latency did my ZephyrQueue project achieve?', undefined,
+    'User: Describe ZephyrQueue.\nAssistant: We were discussing your queue project.',
+    cjsRequire(path.resolve(distDir, 'electron/llm/prompts.js')).CHAT_MODE_PROMPT,
+    false, false, [], undefined, undefined,
+    { referenceText, contextOsGeneration: { govern: true, evidencePack: { answerPolicy: 'ask_clarification' } } },
+  ));
+  assert.equal(storedKnowledgeCalls, 0);
+  assert.equal(calls.length, 1, 'provider must be reached rather than a mode/profile shortcut');
+  assert.match(calls[0].context, /built in Rust with 41 ms latency/);
+  assert.match(calls[0].context, /User: Describe ZephyrQueue/);
+  assert.doesNotMatch(calls[0].context, /REFERENCE_FILE_CONTEXT_SENTINEL|UNRELATED_PROFILE/);
+  assert.doesNotMatch(calls[0].systemPrompt, /PINNED_CUSTOM_MODE_SENTINEL/);
+  assert.match(calls[0].systemPrompt, /general coding questions.*answer normally/);
+});
+
+test('streamChat: Antigravity receives the chat reference, clean question, and prior exchange', async () => {
+  const helper = buildHelper();
+  installCustomDocumentMode({ documentGrounded: true });
+  helper.currentModelId = 'antigravity';
+  helper.getDeniedOutboundScopes = (_message, _images, scopes) => {
+    assert.ok(scopes.includes('reference_files'), 'the attachment must participate in outbound scope checks');
+    return [];
+  };
+  const calls = [];
+  helper.streamWithAntigravity = async function* (prompt, instructions, _images, _signal, referenceText, referenceQuestion, referenceConversationContext) {
+    calls.push({ prompt, instructions, referenceText, referenceQuestion, referenceConversationContext });
+    yield 'Rust.';
+  };
+  const history = 'User: Describe my Atlas project.\nAssistant: Atlas is your queue.';
+  const referenceText = 'Atlas was implemented in Rust.';
+  const question = 'Which language did I use for it?';
+  await drainStream(helper.streamChat(question, undefined, history, undefined, false, false, [], undefined, undefined, { referenceText }));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].referenceText, referenceText);
+  assert.equal(calls[0].referenceQuestion, question);
+  assert.equal(calls[0].referenceConversationContext, history);
+  assert.ok(calls[0].prompt.includes(history));
+  assert.ok(calls[0].prompt.endsWith(question));
+  assert.match(calls[0].instructions, /Never invent employers/);
+  assert.doesNotMatch(calls[0].prompt, /REFERENCE_FILE_CONTEXT_SENTINEL/);
+});
+
+test('streamChat: denied direct-reference scope prevents provider dispatch', async () => {
+  const helper = buildHelper();
+  const calls = attachDispatchSpy(helper);
+  installActiveMode(null);
+  helper.getDeniedOutboundScopes = (_message, _images, scopes) => scopes.includes('reference_files') ? ['reference_files'] : [];
+  const chunks = await drainStream(helper.streamChat('What did I build?', undefined, undefined, undefined, false, false, [], undefined, undefined, { referenceText: 'Private project details.' }));
+  assert.equal(chunks.join(''), DOCUMENT_GROUNDING_SCOPE_DENIED_MESSAGE);
+  assert.equal(calls.length, 0);
+});
+
 test('WhatToAnswerLLM: document-grounded custom mode fails closed when reference-files scope is denied before provider dispatch', async () => {
   const { SettingsManager } = cjsRequire(settingsPath);
   const originalGetInstance = SettingsManager.getInstance;

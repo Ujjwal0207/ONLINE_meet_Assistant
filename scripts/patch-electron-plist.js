@@ -38,6 +38,12 @@ let content = fs.readFileSync(plistPath, 'utf8');
 
 let modified = false;
 
+// AutoType's System Events helper also needs an Automation usage description.
+if (!content.includes('NSAppleEventsUsageDescription')) {
+  content = content.replace('</dict>', '    <key>NSAppleEventsUsageDescription</key>\n    <string>Natively uses System Events to insert code into the editor you select when you start AutoType.</string>\n</dict>');
+  modified = true;
+}
+
 // Patch NSScreenCaptureUsageDescription
 if (!content.includes('NSScreenCaptureUsageDescription')) {
   content = content.replace(

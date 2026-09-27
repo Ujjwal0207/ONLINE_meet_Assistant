@@ -48,6 +48,7 @@ import { assertProviderDataScopes, getDeniedDataScopes, routeWithScopeFallback, 
 // D1 (PROFILE_INTELLIGENCE_RESEARCH_AND_REDESIGN.md §15 R1): make the routing
 // decision authoritative at this central execution choke-point.
 import { profileInterceptAllowedByRoute, modeAnswerType, type StreamRouteOptions } from "./llm/streamContextPolicy"
+import { buildReferenceTextContext, REFERENCE_TEXT_GROUNDING_RULES } from "./llm/referenceTextContext"
 import type { ActiveModeDocumentGroundingInfo } from "./services/ModesManager"
 import type { TranscriptTurn } from "./llm/transcriptCleaner"
 import { deepVariableReplacer, getByPath, injectImageIntoMessages, flattenStructuredJsonAnswer } from './utils/curlUtils';
@@ -899,11 +900,12 @@ export class LLMHelper {
 
   private async *streamWithAntigravity(
     prompt: string, instructions?: string, imagePaths?: string[], signal?: AbortSignal, referenceText?: string,
+    referenceQuestion?: string, referenceConversationContext?: string,
   ): AsyncGenerator<string, void, unknown> {
     if (this.isLocalOnlyMode) throw new Error('Antigravity requires cloud access. Turn off Local Only mode to use it.');
     if (!this.antigravityConfig.enabled) throw new Error('Enable Antigravity in Settings → AI Providers first.');
-    this.assertOutboundScopes('antigravity', prompt, imagePaths);
-    yield* AntigravityService.stream(this.antigravityConfig, { prompt, instructions, imagePaths, signal, referenceText });
+    this.assertOutboundScopes('antigravity', prompt, imagePaths, referenceText?.trim() ? ['reference_files'] : []);
+    yield* AntigravityService.stream(this.antigravityConfig, { prompt, instructions, imagePaths, signal, referenceText, referenceQuestion, referenceConversationContext });
   }
 
   public getAiResponseLanguage(): string {
@@ -4482,6 +4484,14 @@ const isMultimodal = !!(imagePaths?.length);
     // "for pronoun resolution only" so it can never be mistaken for document
     // evidence.
     const callerSuppliedContextForPriorResolution = context;
+    const directReferenceText = routeOptions?.referenceText?.trim() ? routeOptions.referenceText : undefined;
+    if (directReferenceText) {
+      // The attachment selected for THIS chat is its factual source. Stored
+      // profile/mode intercepts and older evidence packs must not replace it.
+      ignoreKnowledgeMode = true;
+      skipModeInjection = true;
+      routeOptions = { ...routeOptions, contextOsGeneration: undefined };
+    }
 
     // RC1 FIX (Profile Intelligence production-fix round 2, 2026-07-05): capture
     // whether the CALLER originally passed CHAT_MODE_PROMPT (manual chat's
@@ -4543,6 +4553,7 @@ const isMultimodal = !!(imagePaths?.length);
     // with any other active mode.
     // ============================================================
     const documentGroundedCustomModeActive = (() => {
+      if (directReferenceText) return false;
       try {
         const { ModesManager } = require('./services/ModesManager');
         // Grounding-campaign3 (2026-07-23): consult the t0-pinned mode id from
@@ -4746,7 +4757,7 @@ const isMultimodal = !!(imagePaths?.length);
       activeModeGroundingInfo = modesMgrForInjection.getActiveModeDocumentGroundingInfo?.(_pinnedModeId);
     } catch { /* non-fatal: preserve legacy skip behavior if modes cannot load */ }
     const isActiveCustomMode = activeModeGroundingInfo?.isCustom === true;
-    const forceDocumentGrounding = activeModeGroundingInfo?.documentGroundedCustomModeActive === true;
+    const forceDocumentGrounding = !directReferenceText && activeModeGroundingInfo?.documentGroundedCustomModeActive === true;
     // Hoisted to function scope (round-6) so the document-grounded userContent
     // shaping below can read the actual retrieval output as `retrievedBlock`.
     // It is assigned inside the mode-injection block; '' when retrieval didn't
@@ -5059,19 +5070,23 @@ const isMultimodal = !!(imagePaths?.length);
     // Preparation
     let isMultimodal = !!(imagePaths?.length);
     const contextScopes = [...extraDataScopes, ...this.inferContextScopes(context), ...this.inferEmbeddedMessageScopes(message)];
+    if (directReferenceText) contextScopes.push('reference_files');
     const deniedOutboundScopes = this.getDeniedOutboundScopes(message, imagePaths, contextScopes);
     if (deniedOutboundScopes.length > 0) {
       const ollamaAvailable = this.useOllama && await this.checkOllamaAvailable(deniedOutboundScopes.includes('screenshots'));
       for (const scope of deniedOutboundScopes) {
         this.logScopeFallback(scope, ollamaAvailable ? 'routing' : 'omitting');
       }
-      if (deniedOutboundScopes.includes('reference_files') && forceDocumentGrounding && !ollamaAvailable) {
+      if (deniedOutboundScopes.includes('reference_files') && (forceDocumentGrounding || directReferenceText) && !ollamaAvailable) {
         yield DOCUMENT_GROUNDING_SCOPE_DENIED_MESSAGE;
         return;
       }
       if (ollamaAvailable) {
-        const ollamaScopePrompt = this.resolveLocalSystemPrompt(this.injectLanguageInstruction(systemPromptOverride || HARD_SYSTEM_PROMPT));
-        yield* this.streamWithOllama(message, context, ollamaScopePrompt, imagePaths, abortSignal);
+        const referenceBlock = directReferenceText ? buildReferenceTextContext({ text: directReferenceText, question: message, conversationContext: context }).block : '';
+        const localContext = referenceBlock ? `${referenceBlock}\n\n${context || ''}` : context;
+        const localSystem = `${systemPromptOverride || HARD_SYSTEM_PROMPT}${directReferenceText ? `\n\n${REFERENCE_TEXT_GROUNDING_RULES}` : ''}`;
+        const ollamaScopePrompt = this.resolveLocalSystemPrompt(this.injectLanguageInstruction(localSystem));
+        yield* this.streamWithOllama(message, localContext, ollamaScopePrompt, imagePaths, abortSignal);
         return;
       }
       if (deniedOutboundScopes.includes('transcript')) context = undefined;
@@ -5096,14 +5111,17 @@ const isMultimodal = !!(imagePaths?.length);
       const { shapeDocumentGroundedSystemPrompt } = require('./llm/documentGroundedPrompt');
       baseSystemPrompt = shapeDocumentGroundedSystemPrompt(baseSystemPrompt, true);
     }
+    if (directReferenceText) {
+      baseSystemPrompt += `\n\n${REFERENCE_TEXT_GROUNDING_RULES}`;
+      systemPromptOverride = baseSystemPrompt;
+    }
     const finalSystemPrompt = this.injectLanguageInstruction(baseSystemPrompt);
     let combinedContext = context;
-    if (routeOptions?.referenceText && routeOptions.referenceText.trim() && !this.isUsingAntigravity()) {
-      const refSnippet = routeOptions.referenceText.length > 200000
-        ? routeOptions.referenceText.slice(0, 200000) + "\n[...reference text truncated for non-Antigravity model]"
-        : routeOptions.referenceText;
-      const refBlock = `## REFERENCE MATERIAL PROVIDED BY USER:\n${refSnippet}`;
+    if (directReferenceText && !this.isUsingAntigravity()) {
+      const refBlock = buildReferenceTextContext({ text: directReferenceText, question: message, conversationContext: callerSuppliedContextForPriorResolution }).block;
       combinedContext = combinedContext ? `${refBlock}\n\n${combinedContext}` : refBlock;
+      // Custom transports consume context directly instead of userContent.
+      context = combinedContext;
     }
 
     // Helper to build combined user message
@@ -5492,7 +5510,7 @@ const isMultimodal = !!(imagePaths?.length);
     // Keep it ahead of fast-mode and the cloud vision fallback so neither can
     // silently send this turn to a different provider. Scope filtering is above.
     if (this.isUsingAntigravity()) {
-      yield* this.streamWithAntigravity(userContent, finalSystemPrompt, imagePaths, abortSignal, routeOptions?.referenceText);
+      yield* this.streamWithAntigravity(userContent, finalSystemPrompt, imagePaths, abortSignal, directReferenceText, message, callerSuppliedContextForPriorResolution);
       return;
     }
 

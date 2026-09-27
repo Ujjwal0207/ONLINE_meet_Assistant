@@ -33,13 +33,15 @@
     <key>com.apple.security.device.audio-input</key>
     <true/>
 
+    <!-- AutoType uses osascript/System Events for user-initiated code insertion. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
     <!--
       INTENTIONALLY OMITTED (verified against Apple docs + codebase audit, 2026-05-29):
         * com.apple.security.screen-capture        — NOT a real Apple entitlement.
           ScreenCaptureKit + the CoreAudio process tap are pure-TCC (Screen & System
           Audio Recording) gated by NSScreenCaptureUsageDescription + user consent.
-        * com.apple.security.automation.apple-events — no AppleScript/osascript usage
-          anywhere in the codebase.
         * com.apple.security.cs.allow-dyld-environment-variables — no DYLD_* env usage
           in app or native code; not part of the Electron hardened-runtime baseline.
       Accessibility (global keyboard tap) is pure TCC via AXIsProcessTrusted — no

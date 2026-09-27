@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { SkillUploadPayload } from './services/skills/SkillValidator';
 import type { AntigravityConfig, AntigravityConfigResult, AntigravityStatus, AntigravityTestResult } from '../src/types/antigravity';
+import type { AutoTypeOptions, AutoTypeState } from '../src/types/autotype';
 
 /**
  * Metadata the companion extension sends with a captured page (drives the
@@ -66,6 +67,12 @@ interface ElectronAPI {
   setAntigravityConfig: (config: Partial<AntigravityConfig>) => Promise<AntigravityConfigResult>;
   getAntigravityStatus: () => Promise<AntigravityStatus>;
   testAntigravity: (config?: Partial<AntigravityConfig>) => Promise<AntigravityTestResult>;
+  startAutoType: (params: AutoTypeOptions) => Promise<{ success: boolean; error?: string }>;
+  cancelAutoType: () => Promise<{ success: boolean }>;
+  getAutoTypeState: () => Promise<AutoTypeState>;
+  onAutoTypeState: (callback: (state: AutoTypeState) => void) => () => void;
+  checkAccessibilityPermission: () => Promise<import('../src/types/autotype').AutoTypePermissionStatus>;
+  openAutoTypePermissionSettings: (kind: import('../src/types/autotype').AutoTypePermissionKind) => Promise<void>;
   getCurrentLlmConfig: () => Promise<{
     provider: 'ollama' | 'gemini' | 'custom' | 'codex-cli' | 'antigravity';
     /**
@@ -1985,6 +1992,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setAntigravityConfig: (config: Partial<AntigravityConfig>) => ipcRenderer.invoke('set-antigravity-config', config),
   getAntigravityStatus: () => ipcRenderer.invoke('get-antigravity-status'),
   testAntigravity: (config?: Partial<AntigravityConfig>) => ipcRenderer.invoke('test-antigravity', config),
+  startAutoType: (params: AutoTypeOptions) => ipcRenderer.invoke('start-auto-type', params),
+  cancelAutoType: () => ipcRenderer.invoke('cancel-auto-type'),
+  getAutoTypeState: () => ipcRenderer.invoke('get-auto-type-state'),
+  onAutoTypeState: (callback: (state: AutoTypeState) => void) => {
+    const subscription = (_event: any, state: AutoTypeState) => callback(state);
+    ipcRenderer.on('auto-typer:state-changed', subscription);
+    return () => {
+      ipcRenderer.removeListener('auto-typer:state-changed', subscription);
+    };
+  },
+  checkAccessibilityPermission: () => ipcRenderer.invoke('check-accessibility-permission'),
+  openAutoTypePermissionSettings: (kind: import('../src/types/autotype').AutoTypePermissionKind) => ipcRenderer.invoke('open-auto-type-permission-settings', kind),
   getCodexCliConfig: () => ipcRenderer.invoke('get-codex-cli-config'),
   setCodexCliConfig: (config: {
     enabled: boolean;

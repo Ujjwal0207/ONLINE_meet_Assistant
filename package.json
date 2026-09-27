@@ -172,6 +172,7 @@
       "identity": null,
       "hardenedRuntime": false,
       "extendInfo": {
+        "NSAppleEventsUsageDescription": "Natively uses System Events to insert code into the editor you select when you start AutoType.",
         "NSScreenCaptureUsageDescription": "Natively needs Screen Recording permission to capture system audio for meeting transcription.",
         "NSMicrophoneUsageDescription": "Natively needs microphone access to transcribe your voice during meetings.",
         "NSAudioCaptureUsageDescription": "Natively needs system audio access to transcribe meeting audio."

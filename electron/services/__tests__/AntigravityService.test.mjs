@@ -56,7 +56,9 @@ process.stdin.on('end', () => {
         setInterval(() => {}, 1000);
     } else {
         const images = fs.readdirSync(process.cwd()).filter(file => file.startsWith('screenshot-'));
-        result(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),prompt,agent:fs.readFileSync(path.join(process.cwd(),'.agents/agents/natively-answer.md'),'utf8'),images:images.map(file=>({name:file,bytes:fs.readFileSync(file).toString('base64')}))}));
+        const referencePath = path.join(process.cwd(), 'reference-document.txt');
+        const reference = fs.existsSync(referencePath) ? fs.readFileSync(referencePath, 'utf8') : null;
+        result(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),prompt,reference,agent:fs.readFileSync(path.join(process.cwd(),'.agents/agents/natively-answer.md'),'utf8'),images:images.map(file=>({name:file,bytes:fs.readFileSync(file).toString('base64')}))}));
     }
 });
 `, { mode: 0o700 });
@@ -97,6 +99,31 @@ test('copies only supplied screenshots and enables only view_file', async () => 
     assert.ok(!response.prompt.includes(screenshot));
     assert.match(response.prompt, /screenshot-1\.png/);
     assert.deepEqual(await fs.readFile(screenshot), bytes);
+    await assert.rejects(fs.stat(response.cwd), { code: 'ENOENT' });
+});
+
+test('reference requests retain full evidence and the latest conversation/follow-up', async () => {
+    const prompt = 'CONTEXT:\nUser: Describe my Atlas project.\nAssistant: Atlas is a queue.\n\nUSER QUESTION:\nWhat language did I use for it?';
+    const referenceText = '# My projects\nAtlas: implemented in Rust.\n';
+    const response = JSON.parse(await AntigravityService.run(config, { prompt, referenceText, referenceQuestion: 'What language did I use for it?' }));
+    assert.equal(response.reference, referenceText);
+    assert.ok(response.prompt.endsWith(prompt));
+    assert.match(response.prompt, /Atlas: implemented in Rust/);
+    assert.match(response.prompt, /coverage="complete"/);
+    assert.match(response.agent, /Never invent employers/);
+    assert.match(response.agent, /general coding questions.*answer normally/);
+    await assert.rejects(fs.stat(response.cwd), { code: 'ENOENT' });
+});
+
+test('large reference inline context finds a fact beyond the old prefix and retains full file access', async () => {
+    const referenceText = `${'Unrelated background information.\n'.repeat(7200)}\nAtlas uses Rust and its measured delay is 19 ms.\n`;
+    const response = JSON.parse(await AntigravityService.run(config, { prompt: 'What is the Atlas delay?', referenceQuestion: 'What is the Atlas delay?', referenceText }));
+    assert.equal(response.reference, referenceText);
+    assert.match(response.prompt, /measured delay is 19 ms/);
+    assert.match(response.prompt, /coverage="selected_excerpts"/);
+    assert.match(response.prompt, /reference-document\.txt/);
+    assert.match(response.prompt, /single view_file response may be partial/);
+    assert.ok(response.prompt.length < 100000);
     await assert.rejects(fs.stat(response.cwd), { code: 'ENOENT' });
 });
 

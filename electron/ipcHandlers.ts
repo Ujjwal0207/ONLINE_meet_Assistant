@@ -11,6 +11,8 @@ import { DatabaseManager } from './db/DatabaseManager'; // Import Database Manag
 import { AppState } from './main';
 import { CodexCliService } from './services/CodexCliService';
 import { AntigravityService } from './services/AntigravityService';
+import { AutoTyperService } from './services/AutoTyperService';
+import type { AutoTypeOptions } from '../src/types/autotype';
 import type { AntigravityConfig } from '../src/types/antigravity';
 import { PhoneMirrorService } from './services/PhoneMirrorService';
 import { sanitizeContextEnvelope } from './services/browser-context/sanitize';
@@ -870,6 +872,10 @@ export function initializeIpcHandlers(appState: AppState): void {
       const { ForegroundGate } = require('./services/ForegroundGate') as typeof import('./services/ForegroundGate');
       try {
         const llmHelper = appState.processingHelper.getLLMHelper();
+        // The Reference Knowledge attachment is the explicitly selected factual
+        // source for this turn. Stored profile/mode routes must not answer or
+        // repair it using a different document before the attachment reaches the LLM.
+        const hasDirectReference = Boolean(options?.referenceText?.trim());
 
         const senderId = event.sender.id;
         const myStreamId = ++_chatStreamId;
@@ -916,7 +922,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // loaded — are interview-rehearsal questions about the CANDIDATE and must
         // reach the deterministic profile fast path instead of leaking
         // "I'm Natively, an AI assistant".
-        if (!imagePaths?.length && typeof message === 'string') {
+        if (!hasDirectReference && !imagePaths?.length && typeof message === 'string') {
           const { resolveIdentityProbe } = require('./llm/manualIdentityRouting') as typeof import('./llm/manualIdentityRouting');
           let probeProfileReady = false;
           try {
@@ -976,7 +982,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // 100s window would echo back the user's just-typed message as both context and
         // question, confusing small models (the "20-char context" log line was just an echo).
         let autoContextSnapshot: string | undefined;
-        if (!context) {
+        if (!hasDirectReference && !context) {
           try {
             const snap = intelligenceManager.getFormattedContext(100);
             if (snap && snap.trim().length > 0) autoContextSnapshot = snap;
@@ -1084,9 +1090,12 @@ export function initializeIpcHandlers(appState: AppState): void {
         // question in a sales/lecture mode routes to that mode's answer type
         // instead of unknown_answer. Read defensively — null keeps mode-blind.
         let manualActiveMode: import('./llm/modeProfiles').ActiveModeInfo | null = null;
+        let manualModeIdAtStart: string | null = null;
         try {
           const { ModesManager } = require('./services/ModesManager');
-          manualActiveMode = ModesManager.getInstance().getActiveModeInfo();
+          const modeAtStart = ModesManager.getInstance().getActiveModeInfo();
+          manualModeIdAtStart = modeAtStart?.id ?? null;
+          if (!hasDirectReference) manualActiveMode = modeAtStart;
         } catch { /* mode prior unavailable — planAnswer stays mode-blind */ }
 
         // Defense-in-depth at the LLM boundary: as of 2026-07-18, no known code path
@@ -1127,6 +1136,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // in a separate try block) resolve the SAME per-turn explicit switch.
         let _userExplicitSource: 'reference_files' | 'profile' | 'transcript' | null = null;
         let manualTurnSourceDecision: import('./llm/turnSourceDecision').TurnSourceDecision | null = null;
+        if (!hasDirectReference) {
         try {
           const { buildCustomModeExecutionContract, logArbitratedContract } = require('./llm/customModeExecutionContract');
           const { resolveTurnSourceDecision } = require('./llm/turnSourceDecision') as typeof import('./llm/turnSourceDecision');
@@ -1218,6 +1228,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           if (isIntelligenceFlagEnabled('trace')) {
             console.warn('[SOURCE-ARBITER] skipped (non-fatal):', arbiterErr?.message);
           }
+        }
         }
 
         // ── CONTEXT OS (Phase 7, 2026-07-10) ────────────────────────────────
@@ -1566,7 +1577,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             }
           } catch { /* refinement recall never blocks the answer */ }
         }
-        if (!context && !autoContextSnapshot && isBareFollowUp(message)) {
+        if (!hasDirectReference && !context && !autoContextSnapshot && isBareFollowUp(message)) {
           let clarSurface: 'manual' | 'lecture' | 'sales' = 'manual';
           try {
             const { ModesManager } = require('./services/ModesManager');
@@ -1813,7 +1824,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         })();
         const sourceOwnershipAllowsProfile = ((manualOwnership && !_ownerEnforcementOff)
           ? manualOwnership.profileAllowed
-          : legacyDocGuardEligible) && _contractAllowsProfile && _impossibleStateGateAllowsProfile;
+          : legacyDocGuardEligible) && _contractAllowsProfile && _impossibleStateGateAllowsProfile && !hasDirectReference;
         // TurnEvidenceCoordinator wiring gap fix (grounding campaign, 2026-07-18):
         // this legacy fast path and the coordinator below (`coordinatorInScopeKinds`,
         // ~line 2179) previously raced with no reconciliation. When the canonical
@@ -2150,7 +2161,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         const wantsCandidateContract = CANDIDATE_CONTRACT_TYPES.has(answerPlan.answerType)
           // a styled question ALWAYS gets the contract so the style reaches the model.
           || (answerPlan.answerStyle && answerPlan.answerStyle !== 'default');
-        if (wantsCandidateContract && !isContractEnforced && !isCodingChat && !selectedProfileEvidence) {
+        if (!hasDirectReference && wantsCandidateContract && !isContractEnforced && !isCodingChat && !selectedProfileEvidence) {
           const candidateContract = formatAnswerPlanForPrompt(answerPlan, false);
           // HUMAN-LIKENESS (task Phase 12): append the anti-corporate-filler directive for
           // spoken candidate/sales answers so they sound like a person, not a brochure.
@@ -2230,7 +2241,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // CONTEXT OS (Phase 7): the contract's memoryReadPolicy must also allow
         // Hindsight. Null contract → legacy decision alone. Narrowing only.
         const _contractAllowsHindsight = turnContract ? turnContract.memoryReadPolicy.allowHindsight : true;
-        if (!isCodingChat && !isContractEnforced
+        if (!hasDirectReference && !isCodingChat && !isContractEnforced
             && _contractAllowsHindsight
             && !(_isDocGroundedTurn && isIntelligenceFlagEnabled('docGroundedStrictIsolation'))
             && _hindsightOwnerAllows
@@ -2595,7 +2606,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           // knowledge intercept at all — no profile, no intro, no candidate
           // grounding belongs in a policy redirect (release 2026-06-06b).
           const isSafetyAnswer = answerPlan.answerType === 'ethical_usage_answer';
-          const ignoreKnowledge = isCodingChat || isSafetyAnswer ? true : options?.ignoreKnowledgeMode;
+          const ignoreKnowledge = hasDirectReference || isCodingChat || isSafetyAnswer ? true : options?.ignoreKnowledgeMode;
           iTrace.lifecycle('evidence_selected', {
             selectedEvidenceCount: selectedProfileEvidence?.items.length ?? 0,
             renderedEvidenceCount: selectedProfileEvidence?.items.length ?? 0,
@@ -2616,7 +2627,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             context,
             systemPromptOverride,
             ignoreKnowledge,
-            isCodingChat || isSafetyAnswer, // skipModeInjection; safety/coding must not pull active-mode resume/JD/reference context
+            hasDirectReference || isCodingChat || isSafetyAnswer, // skip unrelated active-mode evidence for an explicit attachment
             [],    // extraDataScopes
             myController.signal,
             // Coding gets a small reasoning budget (correctness); everything else
@@ -2917,7 +2928,7 @@ export function initializeIpcHandlers(appState: AppState): void {
                 let regen = '';
                 const regenAbort = new AbortController();
                 await raceStreamWithDeadline({
-                  stream: llmHelper.streamChat(regenPrompt, undefined, codingPriorProblemBlock || undefined, undefined, true, true, [], regenAbort.signal) as AsyncGenerator<string>,
+                  stream: llmHelper.streamChat(regenPrompt, undefined, context || codingPriorProblemBlock || undefined, undefined, true, true, [], regenAbort.signal, undefined, { referenceText: options?.referenceText }) as AsyncGenerator<string>,
                   firstUsefulDeadlineMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 8000,
                   interTokenStallMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : undefined,
                   isUsefulYet: () => regen.length >= 10,
@@ -2998,7 +3009,7 @@ export function initializeIpcHandlers(appState: AppState): void {
                 // silently no-op'd at runtime AND failed the typecheck.)
                 const regenAbort = new AbortController();
                 await raceStreamWithDeadline({
-                  stream: llmHelper.streamChat(regenPrompt, undefined, codingPriorProblemBlock || undefined, undefined, true, true, [], regenAbort.signal) as AsyncGenerator<string>,
+                  stream: llmHelper.streamChat(regenPrompt, undefined, context || codingPriorProblemBlock || undefined, undefined, true, true, [], regenAbort.signal, undefined, { referenceText: options?.referenceText }) as AsyncGenerator<string>,
                   firstUsefulDeadlineMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 8000,
                   interTokenStallMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : undefined,
                   isUsefulYet: () => regen.length >= 10,
@@ -3018,7 +3029,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             } catch (completenessErr: any) {
               console.warn('[IPC] code completeness check skipped:', completenessErr?.message);
             }
-          } else {
+          } else if (!hasDirectReference) {
             // Spec §7 / §12.9: validate PROFILE answers post-generation. Detects
             // the assistant-identity leak ("I am Natively"), false "no access" /
             // "no experience" refusals when the profile exists, wrong perspective,
@@ -3116,7 +3127,7 @@ export function initializeIpcHandlers(appState: AppState): void {
                   // (was 4s) clears MiniMax's 4-6s first-token when it's the fallback.
                   // Local model: longer budget for the same cold-load reason as above.
                   await raceStreamWithDeadline({
-                    stream: llmHelper.streamChat(repairPrompt, undefined, undefined, undefined, true, true) as AsyncGenerator<string>,
+                    stream: llmHelper.streamChat(repairPrompt, undefined, context, undefined, true, true, [], myController?.signal, undefined, { referenceText: options?.referenceText }) as AsyncGenerator<string>,
                     firstUsefulDeadlineMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : usingLocalLlm ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
                     interTokenStallMs: usingAntigravity ? llmHelper.getAntigravityConfig().timeoutMs : undefined,
                     isUsefulYet: () => repaired.length >= 5,
@@ -3151,7 +3162,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           // for forbidden types) → zero happy-path cost on profile answers. The user
           // can opt in ("use my Natively project"). Runs for coding AND non-coding
           // forbidden types (previously coding-only).
-          if (answerPlan.profileContextPolicy === 'forbidden') {
+          if (!hasDirectReference && answerPlan.profileContextPolicy === 'forbidden') {
             try {
               const orchC = llmHelper.getKnowledgeOrchestrator?.();
               const resumeC = (orchC as any)?.activeResume?.structured_data ?? null;
@@ -3202,7 +3213,7 @@ export function initializeIpcHandlers(appState: AppState): void {
               _attr.profile_tree_used = true; // ProfileTreeService guard consulted on this answer
             }
           } catch { /* guard never blocks the answer */ }
-          if (CANDIDATE_VOICE_ANSWER_TYPES.has(answerPlan.answerType) || _perspectiveExpectsCandidate) {
+          if (!hasDirectReference && (CANDIDATE_VOICE_ANSWER_TYPES.has(answerPlan.answerType) || _perspectiveExpectsCandidate)) {
             try {
               // NON-CANDIDATE CONTENT: the candidate-voice sanitizer (assistant-meta tail
               // strip + safe-string fallback) was designed for candidate IDENTITY answers
@@ -3293,7 +3304,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           // of a real answer. Detect that misfire (conservative: only when the canned
           // line IS the whole short answer) and substitute an honest, grounded line —
           // never ship a self-identification or stock refusal as the answer.
-          if (!isCodingChat && ASSISTANT_VOICE_ANSWER_TYPES.has(answerPlan.answerType)) {
+          if (!hasDirectReference && !isCodingChat && ASSISTANT_VOICE_ANSWER_TYPES.has(answerPlan.answerType)) {
             try {
               const misfire = detectAssistantVoiceMisfire(fullResponse);
               if (misfire.isMisfire) {
@@ -3343,7 +3354,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           // 3. Diversity: same first-sentence / template / near-duplicate answers
           //    across DIFFERENT questions are compressed to speakable prose so a
           //    long session never reads as canned. Deterministic; no extra LLM call.
-          if (!isCodingChat) {
+          if (!hasDirectReference && !isCodingChat) {
             try {
               const { cleanAnswerArtifacts, compressToSpeakable, SCAFFOLD_LABEL_RE } = require('./llm/answerPolish') as typeof import('./llm/answerPolish');
               const cleaned = cleanAnswerArtifacts(fullResponse);
@@ -4406,7 +4417,7 @@ export function initializeIpcHandlers(appState: AppState): void {
                   // alone — exactly the case this guard must catch.
                   const { ModesManager: _ModesManagerForRecordGuard } = require('./services/ModesManager');
                   const liveModeIdAtRecord = _ModesManagerForRecordGuard.getInstance().getActiveMode()?.id ?? null;
-                  if (liveModeIdAtRecord === (manualActiveMode?.id ?? null)) {
+                  if (liveModeIdAtRecord === manualModeIdAtStart) {
                     _manualConversationMemory.record({
                       sessionId: String(senderId),
                       userMessage: message,
@@ -7586,6 +7597,15 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('get-antigravity-status', () => AntigravityService.getStatus(appState.processingHelper.getLLMHelper().getAntigravityConfig()));
+
+  safeHandle('start-auto-type', (_, params: AutoTypeOptions) => AutoTyperService.getInstance().start(params));
+  safeHandle('cancel-auto-type', () => AutoTyperService.getInstance().cancel());
+  safeHandle('get-auto-type-state', () => AutoTyperService.getInstance().getState());
+  safeHandle('check-accessibility-permission', () => AutoTyperService.getInstance().getPermissionStatus());
+  safeHandle('open-auto-type-permission-settings', (_, kind: unknown) => {
+    if (kind !== 'accessibility' && kind !== 'automation') throw new Error('Invalid permission setting');
+    return AutoTyperService.getInstance().openPermissionSettings(kind);
+  });
 
   safeHandle('test-antigravity', async (_, config?: Partial<AntigravityConfig>) => {
     try {
