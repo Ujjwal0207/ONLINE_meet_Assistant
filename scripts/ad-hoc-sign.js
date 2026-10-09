@@ -234,4 +234,17 @@ exports.default = async function (context) {
             }
         }
     }
+
+    // Replacing the .node signatures changes files covered by the outer app
+    // bundle seal. Re-seal the main bundle without --deep so the custom
+    // entitlements stay on Natively and the native modules keep their own
+    // signatures. Without this final pass, codesign --verify --deep reports
+    // the audio binaries as modified and macOS may refuse to load them.
+    try {
+        console.log('[Ad-Hoc Signing] Re-sealing the app bundle after native-module signing...');
+        execSync(`codesign --force ${hardenedOpt}--entitlements "${entitlementsPath}" --sign - "${appPath}"`, { stdio: 'inherit' });
+    } catch (error) {
+        console.error('[Ad-Hoc Signing] Failed to re-seal the app bundle:', error);
+        throw error;
+    }
 };

@@ -360,6 +360,7 @@ import { DynamicActionBar } from './dynamic-actions/DynamicActionBar';
 import GlassEffectLayer from './ui/GlassEffectLayer';
 import ResizeToggle from './ui/ResizeToggle';
 import RollingTranscript from './ui/RollingTranscript';
+import MeetCaptionBar from './ui/MeetCaptionBar';
 import TopPill from './ui/TopPill';
 
 // PERF: hoisted plugin arrays. ReactMarkdown receives `remarkPlugins` and
@@ -1405,6 +1406,20 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const [voiceInput, setVoiceInput] = useState(''); // Accumulated user voice input
   const voiceInputRef = useRef<string>(''); // Ref for capturing in async handlers
   const textInputRef = useRef<HTMLInputElement>(null); // Ref for input focus
+  const [meetCaptionText, setMeetCaptionText] = useState('');
+  const [meetCaptionPartial, setMeetCaptionPartial] = useState('');
+  const [isAutoFillCaption, setIsAutoFillCaption] = useState(() => {
+    return localStorage.getItem('natively_caption_autofill') !== 'false';
+  });
+  const isAutoFillCaptionRef = useRef(isAutoFillCaption);
+  useEffect(() => {
+    isAutoFillCaptionRef.current = isAutoFillCaption;
+  }, [isAutoFillCaption]);
+  const lastAutoFilledRef = useRef('');
+  const inputValueRef = useRef(inputValue);
+  useEffect(() => {
+    inputValueRef.current = inputValue;
+  }, [inputValue]);
   const isStealthRef = useRef<boolean>(false); // Tracks if the next expansion should be stealthy
   // Startup-flicker guards (restored from 2de1b62, reverted by 18b139b):
   //  - isExpandedEffectInitializedRef: skip the FIRST run of the visibility-sync
@@ -4453,6 +4468,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
             setIsInterviewerSpeaking(true);
           }
           applyRollingPartialPreview(transcript.text);
+          setMeetCaptionPartial(transcript.text);
           return;
         }
 
@@ -4460,6 +4476,17 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
         interviewerSpeakingRef.current = false;
         setIsInterviewerSpeaking(false);
         setRollingTranscript((prev) => mergeRollingTranscriptFinal(prev, transcript.text));
+        setMeetCaptionPartial('');
+        const trimmedCaption = transcript.text?.trim() || '';
+        if (trimmedCaption) {
+          setMeetCaptionText(trimmedCaption);
+          if (isAutoFillCaptionRef.current) {
+            if (!inputValueRef.current.trim() || inputValueRef.current === lastAutoFilledRef.current) {
+              setInputValue(trimmedCaption);
+              lastAutoFilledRef.current = trimmedCaption;
+            }
+          }
+        }
 
         setTimeout(() => {
           setIsInterviewerSpeaking(false);
@@ -7674,7 +7701,14 @@ Provide only the answer, nothing else.`;
                       return (
                         <>
                           <button
-                            onClick={() => {
+                            onClick={async () => {
+                              if (wantsMicrophonePane) {
+                                try {
+                                  await window.electronAPI?.requestMicPermission?.();
+                                } catch (e) {
+                                  console.warn('[UI] requestMicPermission error:', e);
+                                }
+                              }
                               if (deepLinkUrl) {
                                 window.electronAPI.openExternal(deepLinkUrl);
                               } else {
@@ -8391,6 +8425,37 @@ Provide only the answer, nothing else.`;
                   </div>
                 )}
 
+                {/* Dedicated Meet Sound Caption Bar — hears speech from meet (Google Meet, Zoom, Teams, any app) */}
+                <MeetCaptionBar
+                  captionText={meetCaptionText}
+                  partialText={meetCaptionPartial}
+                  isSpeaking={isInterviewerSpeaking}
+                  sttStatus={sttInterviewerStatus}
+                  autoFillInput={isAutoFillCaption}
+                  onToggleAutoFill={() => {
+                    setIsAutoFillCaption((prev) => {
+                      const next = !prev;
+                      localStorage.setItem('natively_caption_autofill', String(next));
+                      return next;
+                    });
+                  }}
+                  onUseAsQuestion={(text) => {
+                    setInputValue(text);
+                    lastAutoFilledRef.current = text;
+                    textInputRef.current?.focus();
+                  }}
+                  onSubmitQuestion={(text) => {
+                    setInputValue(text);
+                    lastAutoFilledRef.current = text;
+                    setTimeout(() => handleManualSubmitRef.current(), 0);
+                  }}
+                  onClear={() => {
+                    setMeetCaptionText('');
+                    setMeetCaptionPartial('');
+                  }}
+                  appearance={appearance}
+                />
+
                 {/* data-stealth-engage marks this subtree as
                                     the ONLY clickable region that engages the
                                     CGEventTap. See the click-to-activate
@@ -8684,18 +8749,27 @@ Provide only the answer, nothing else.`;
                   </div>
 
                   <button
-                    onClick={handleManualSubmit}
-                    disabled={!inputValue.trim() && attachedContext.length === 0}
+                    onClick={() => {
+                      if (!inputValue.trim() && meetCaptionText.trim()) {
+                        const q = meetCaptionText.trim();
+                        setInputValue(q);
+                        lastAutoFilledRef.current = q;
+                        setTimeout(() => handleManualSubmitRef.current(), 0);
+                        return;
+                      }
+                      handleManualSubmit();
+                    }}
+                    disabled={!inputValue.trim() && !meetCaptionText.trim() && attachedContext.length === 0}
                     className={`
                                     w-7 h-7 rounded-full flex items-center justify-center
                                     interaction-base interaction-press
                                     ${
-                                      inputValue.trim() || attachedContext.length > 0
+                                      inputValue.trim() || meetCaptionText.trim() || attachedContext.length > 0
                                         ? 'bg-[#007AFF] text-white shadow-lg shadow-blue-500/20 hover:bg-[#0071E3]'
                                         : 'overlay-icon-surface overlay-text-muted cursor-not-allowed'
                                     }
                                 `}
-                    style={inputValue.trim() || attachedContext.length > 0 ? undefined : appearance.iconStyle}
+                    style={inputValue.trim() || meetCaptionText.trim() || attachedContext.length > 0 ? undefined : appearance.iconStyle}
                   >
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>

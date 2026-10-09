@@ -96,9 +96,11 @@ function canBuildCidre() {
 
 if (os.platform() === 'darwin') {
   if (!canBuildCidre()) {
-    console.log('[build-native] Notice: Full Xcode.app (xcodebuild) is not installed (Command Line Tools active).');
-    console.log('[build-native] Skipping optional Rust native-module build; Natively will use built-in audio fallback.');
-    process.exit(0);
+    throw new Error(
+      '[build-native] Full Xcode.app (xcodebuild) is required to build the macOS audio-capture module. ' +
+      'Command Line Tools alone cannot compile the ScreenCaptureKit/CoreAudio bindings. ' +
+      'Refusing to produce an app that cannot capture microphone or meeting audio.'
+    );
   }
 
   const macTargets = buildAllMacTargets

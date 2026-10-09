@@ -278,6 +278,38 @@ test('setSttProvider round-trip + persistence status (M2 contract)', () => {
   assert.equal(cm2.getSttProvider(), 'soniox', 'STT provider selection must survive restart');
 });
 
+test('an unset STT provider migrates to free local transcription and survives restart', () => {
+  const env = makeEnv();
+  env.state.keyringAvailable = false;
+
+  const cm = freshManager(env);
+  assert.equal(cm.getSttProvider(), 'local-whisper');
+
+  const cm2 = freshManager(env);
+  assert.equal(cm2.getSttProvider(), 'local-whisper');
+});
+
+test('legacy implicit None migrates to Local Whisper', () => {
+  const env = makeEnv();
+  const cm = freshManager(env);
+  // Simulate the old credential shape: older versions stored `none` without
+  // recording whether the user had actually chosen to disable transcription.
+  cm.credentials = { sttProvider: 'none' };
+  assert.equal(cm.getSttProvider(), 'local-whisper');
+});
+
+test('None remains disabled only when the user explicitly chose it', () => {
+  const env = makeEnv();
+  env.state.keyringAvailable = false;
+
+  const cm = freshManager(env);
+  assert.equal(cm.setSttProvider('none'), true);
+  assert.equal(cm.getSttProvider(), 'none');
+
+  const cm2 = freshManager(env);
+  assert.equal(cm2.getSttProvider(), 'none');
+});
+
 test('setSttProvider returns false when the disk write fails (M2 contract — mirrors STT key guard)', () => {
   const env = makeEnv();
   env.state.keyringAvailable = false;
@@ -316,9 +348,10 @@ test('process.platform is NOT in the fallback key material (P5 hardening)', () =
     path.resolve(path.dirname(new URL(import.meta.url).pathname), '../CredentialsManager.ts'),
     'utf8',
   );
-  // Locate the getFallbackKey body — everything from "private getFallbackKey"
+  // Locate the getFallbackKey body — it is public so the fallback provider can
+  // be exercised by diagnostics, but its derivation inputs remain encapsulated.
   // through the next private/public declaration at the same indent.
-  const start = src.indexOf('private getFallbackKey');
+  const start = src.search(/(?:private|public) getFallbackKey/);
   assert.ok(start >= 0, 'getFallbackKey method must exist');
   const end = src.indexOf('\n    private ', start + 1);
   const body = end > start ? src.slice(start, end) : src.slice(start, start + 1500);

@@ -56,6 +56,10 @@ export interface StoredCredentials {
     nativelyApiKey?: string;
     // STT Provider settings
     sttProvider?: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'natively' | 'local-whisper';
+    /** True only when the user explicitly selected None in Settings. Older
+     * installs stored `none` as the implicit default, so absence of this flag
+     * lets us migrate those installs to free on-device transcription. */
+    sttProviderExplicitlyDisabled?: boolean;
     groqSttApiKey?: string;
     groqSttModel?: string;
     openAiSttApiKey?: string;
@@ -321,15 +325,28 @@ export class CredentialsManager {
     }
 
     public getSttProvider(): 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'natively' | 'local-whisper' {
-        const provider = this.credentials.sttProvider || 'none';
+        let provider = this.credentials.sttProvider;
         // Self-heal: if provider is 'none' but a Natively key exists, the user is in a
         // broken state (key cleared then re-entered via a path that skipped auto-promote,
         // or credentials restored from backup). Silently restore to 'natively' so STT works.
-        if (provider === 'none' && this.credentials.nativelyApiKey) {
+        if (provider === 'none' && this.credentials.sttProviderExplicitlyDisabled !== true && this.credentials.nativelyApiKey) {
             this.credentials.sttProvider = 'natively';
+            this.credentials.sttProviderExplicitlyDisabled = false;
             this.saveCredentials();
             console.log('[CredentialsManager] Self-healed sttProvider: none→natively (Natively key present)');
             return 'natively';
+        }
+
+        // Older versions defaulted to `none`, leaving new installs with audio
+        // capture but no transcription. Migrate that implicit state to Local
+        // Whisper, which runs on-device and does not need an STT key or paid
+        // captions service. Preserve an explicit None choice made in Settings.
+        if (!provider || (provider === 'none' && this.credentials.sttProviderExplicitlyDisabled !== true)) {
+            this.credentials.sttProvider = 'local-whisper';
+            this.credentials.sttProviderExplicitlyDisabled = false;
+            this.saveCredentials();
+            console.log('[CredentialsManager] Enabled Local Whisper as the free default STT provider');
+            return 'local-whisper';
         }
         return provider;
     }
@@ -540,6 +557,7 @@ export class CredentialsManager {
 
     public setSttProvider(provider: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'natively' | 'local-whisper'): boolean {
         this.credentials.sttProvider = provider;
+        this.credentials.sttProviderExplicitlyDisabled = provider === 'none';
         const persisted = this.saveCredentials();
         console.log(`[CredentialsManager] STT Provider set to: ${provider}`);
         return persisted;
@@ -704,8 +722,11 @@ export class CredentialsManager {
             }
 
             // Auto-promote natively STT if still on 'none' or the default Google STT
-            if (!this.credentials.sttProvider || this.credentials.sttProvider === 'none' || this.credentials.sttProvider === 'google') {
+            if (!this.credentials.sttProvider
+                || (this.credentials.sttProvider === 'none' && this.credentials.sttProviderExplicitlyDisabled !== true)
+                || this.credentials.sttProvider === 'google') {
                 this.credentials.sttProvider = 'natively';
+                this.credentials.sttProviderExplicitlyDisabled = false;
                 console.log('[CredentialsManager] Auto-set STT provider to natively');
             }
         } else {
@@ -716,6 +737,7 @@ export class CredentialsManager {
             }
             if (this.credentials.sttProvider === 'natively') {
                 this.credentials.sttProvider = 'none';
+                this.credentials.sttProviderExplicitlyDisabled = false;
                 console.log('[CredentialsManager] Natively key cleared — reset STT provider to none');
             }
         }
