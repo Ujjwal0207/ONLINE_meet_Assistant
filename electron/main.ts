@@ -2463,16 +2463,9 @@ export class AppState {
       this.broadcast("update-downloaded", this.downloadedUpdateInfo)
     })
 
-    // Start checking for updates with a 10-second delay
-    setTimeout(() => {
-      if (process.env.NODE_ENV === "development") {
-        console.log("[AutoUpdater] Development mode: Skipping auto check (use manual button)");
-      } else {
-        autoUpdater.checkForUpdatesAndNotify().catch(err => {
-          console.error("[AutoUpdater] Failed to check for updates:", err);
-        });
-      }
-    }, 10000);
+    // Auto-update disabled: no GitHub Releases are published on this fork.
+    // To re-enable, uncomment the block below once releases are set up.
+    console.log('[AutoUpdater] Auto-update check disabled (no releases published on this repo).');
   }
 
   private async checkForUpdatesManual(): Promise<void> {
@@ -2678,19 +2671,8 @@ export class AppState {
   }
 
   public async checkForUpdates(): Promise<void> {
-    console.log('[AutoUpdater] Manual check for updates requested')
-    try {
-      // In development mode, use manual GitHub API check (electron-updater skips in dev)
-      if (process.env.NODE_ENV === "development") {
-        await this.checkForUpdatesManual()
-      } else {
-        await autoUpdater.checkForUpdatesAndNotify()
-      }
-    } catch (err: any) {
-      console.error('[AutoUpdater] checkForUpdates failed:', err)
-      const errorMessage = err.message || err.toString() || 'Update check failed'
-      this.broadcast("update-error", errorMessage)
-    }
+    // Auto-update disabled: no GitHub Releases are published on this fork.
+    console.log('[AutoUpdater] Update check disabled — no releases published on this repo.')
   }
 
   public async downloadUpdate(): Promise<void> {
