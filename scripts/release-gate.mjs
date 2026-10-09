@@ -166,11 +166,11 @@ check('packaged app-update.yml has provider=github + releaseType=release', () =>
     if (!/provider:\s*github/.test(text)) {
       throw new Error(`${f}: provider is not github:\n${text}`);
     }
-    if (!/owner:\s*Natively-AI-assistant/.test(text)) {
-      throw new Error(`${f}: owner is not Natively-AI-assistant:\n${text}`);
+    if (!/owner:\s*Ujjwal0207/.test(text)) {
+      throw new Error(`${f}: owner is not Ujjwal0207:\n${text}`);
     }
-    if (!/repo:\s*natively-cluely-ai-assistant/.test(text)) {
-      throw new Error(`${f}: repo is not natively-cluely-ai-assistant:\n${text}`);
+    if (!/repo:\s*ONLINE_meet_Assistant/.test(text)) {
+      throw new Error(`${f}: repo is not ONLINE_meet_Assistant:\n${text}`);
     }
     if (!/releaseType:\s*release/.test(text)) {
       throw new Error(`${f}: releaseType is not "release":\n${text}`);

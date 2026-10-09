@@ -14,7 +14,8 @@ type ParsedReleaseNotes = {
     url?: string;
 };
 
-const LATEST_RELEASE_URL = 'https://github.com/Natively-AI-assistant/natively-cluely-ai-assistant/releases/latest';
+const RELEASES_URL = 'https://github.com/Ujjwal0207/ONLINE_meet_Assistant/releases';
+const LATEST_RELEASE_URL = `${RELEASES_URL}/latest`;
 
 const UpdateBanner: React.FC = () => {
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -154,7 +155,7 @@ const UpdateBanner: React.FC = () => {
                 const dmgSuffix = isArm ? 'arm64' : 'x64';
                 setInstructionsArch(dmgSuffix);
                 const version = updateInfo.version.replace('v', '');
-                const url = `https://github.com/Natively-AI-assistant/natively-cluely-ai-assistant/releases/download/v${version}/Natively-${version}-${dmgSuffix}.dmg`;
+                const url = `https://github.com/Ujjwal0207/ONLINE_meet_Assistant/releases/download/v${version}/Natively-${version}-${dmgSuffix}.dmg`;
                 window.electronAPI.openExternal(url);
                 setStatus('instructions');
             } catch (err) {

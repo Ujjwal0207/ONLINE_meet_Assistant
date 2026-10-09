@@ -36,6 +36,6 @@ test('release notes parser accepts GitHub H3 headings and emoji-decorated titles
 
 test('release notes manager points at the published GitHub repository', () => {
   const manager = ReleaseNotesManager.getInstance();
-  assert.equal(manager.repoOwner, 'Natively-AI-assistant');
-  assert.equal(manager.repoName, 'natively-cluely-ai-assistant');
+  assert.equal(manager.repoOwner, 'Ujjwal0207');
+  assert.equal(manager.repoName, 'ONLINE_meet_Assistant');
 });
